@@ -6,41 +6,33 @@ from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="海外無敵", page_icon="📡", layout="wide")
-st.title("📡 海外無敵搜尋引擎")
+st.set_page_config(page_title="全球廚電全網雷達 Lite", page_icon="📡", layout="wide")
+st.title("📡 全球廚電全網雷達 (Lite)")
 
 # --- 2. 核心功能函數 ---
 
-# A. Google News 爬蟲 (修復版)
+# A. Google News 爬蟲 (無摘要版)
 def fetch_google_news(keyword, lang, region):
-    # --- 關鍵修正：針對北美中文的特殊處理 ---
-    # 如果是在美國/加拿大搜中文，我們不要強制設定 gl=US，因為那會濾掉很多華人媒體
-    # 改為：使用關鍵字限定，但放寬地區限制
-    
+    # 智慧搜尋邏輯
     search_query = keyword
     target_gl = region
     target_ceid = f"{region}:{lang.split('-')[0]}"
     
-    # 特殊邏輯：如果是北美地區的中文搜尋
+    # 針對北美中文的特殊處理 (關鍵字植入 + 放寬地區)
     if (region in ["US", "CA"]) and ("zh" in lang):
-        # 1. 自動幫關鍵字加料 (Keyword Injection)
         if region == "US":
             search_query = f"{keyword} (美國 OR 北美 OR USA)"
         elif region == "CA":
             search_query = f"{keyword} (加拿大 OR Canada OR 温哥华 OR 多伦多)"
-            
-        # 2. 放寬地區設定：改用台灣介面搜，但關鍵字含地區
-        # 這樣最容易搜到世界日報、或是台灣人討論美國生活的文章
         target_gl = "TW" 
         target_ceid = "TW:zh-Hant"
 
-    encoded_keyword = urllib.parse.quote(search_query)
-    
     # 香港維持原樣
     if region == "HK" and "zh" in lang:
         target_ceid = "HK:zh-Hant"
         target_gl = "HK"
 
+    encoded_keyword = urllib.parse.quote(search_query)
     target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={target_gl}&ceid={target_ceid}"
     
     try:
@@ -54,43 +46,35 @@ def fetch_google_news(keyword, lang, region):
                 
             data.append({
                 "Date": pub_date,
-                "Type": "新聞 (News)",
+                "Type": "新聞",
                 "Title": entry.title,
                 "Source": entry.source.title if 'source' in entry else "Google News",
-                "Link": entry.link,
-                "Snippet": "點擊閱讀全文..."
+                "Link": entry.link
             })
         return pd.DataFrame(data)
     except:
         return pd.DataFrame()
 
-# B. DuckDuckGo 全網爬蟲 (修復版)
+# B. DuckDuckGo 全網爬蟲 (無摘要版)
 def fetch_web_search(keyword, region_code, time_range):
-    # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
     elif region_code == "HK": ddg_region = "hk-tzh"
     else: ddg_region = "wt-wt"
     
-    # 時間參數
     ddg_time = None 
     if time_range == "過去一天": ddg_time = "d"
     elif time_range == "過去一週": ddg_time = "w"
     elif time_range == "過去一個月": ddg_time = "m"
     elif time_range == "過去一年": ddg_time = "y"
     
-    # --- 關鍵修正：DuckDuckGo 的中文搜尋優化 ---
-    # 如果是在美國搜中文，我們不要鎖定 region="us-en" (那會只搜英文網站)
-    # 我們改用全球搜索 (wt-wt)，但是加上地區關鍵字
-    
+    # 中文搜尋優化
     final_keyword = keyword
     search_region = ddg_region
-    
-    # 判斷是否包含中文字 (簡單判斷)
     is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
     
     if (region_code in ["US", "CA"]) and is_chinese_query:
-        search_region = "wt-wt" # 放寬到全球
+        search_region = "wt-wt"
         if region_code == "US":
             final_keyword = f"{keyword} (美國 OR 北美 OR 華人)"
         elif region_code == "CA":
@@ -103,11 +87,10 @@ def fetch_web_search(keyword, region_code, time_range):
         for r in results:
             data.append({
                 "Date": datetime.now(),
-                "Type": "全網 (Web/Forum)",
+                "Type": "全網",
                 "Title": r['title'],
                 "Source": urllib.parse.urlparse(r['href']).netloc,
-                "Link": r['href'],
-                "Snippet": r['body']
+                "Link": r['href']
             })
         return pd.DataFrame(data)
     except Exception as e:
@@ -117,7 +100,6 @@ def fetch_web_search(keyword, region_code, time_range):
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     
-    # 定義任務
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
         region_code = "US"
@@ -128,14 +110,12 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
         region_code = "HK"
     
-    # 1. 跑新聞
     if "新聞媒體 (News)" in search_types:
         if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
             for lang, region in news_tasks:
                 df = fetch_google_news(keyword, lang, region)
                 frames.append(df)
             
-    # 2. 跑全網
     if "論壇與部落格 (Forums/Blogs)" in search_types:
         df_web = fetch_web_search(keyword, region_code, time_range)
         frames.append(df_web)
@@ -168,7 +148,7 @@ with st.sidebar:
 # --- 4. 主畫面 ---
 
 if mode == "📡 全網掃描 (Live)":
-    st.subheader("📡 全球廚電全網掃描 (Pro)")
+    st.subheader("📡 全球廚電全網掃描")
     
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
@@ -184,9 +164,9 @@ if mode == "📡 全網掃描 (Live)":
         default=["新聞媒體 (News)", "論壇與部落格 (Forums/Blogs)"]
     )
     
-    if st.button("🚀 搜尋", type="primary"):
+    if st.button("🚀 發射雷達", type="primary"):
         if search_kw:
-            with st.spinner(f"正在挖掘 {location} 的中英文情報 (已啟用智慧關鍵字優化)..."):
+            with st.spinner(f"正在挖掘 {location} 的相關情報..."):
                 df = run_hybrid_search(search_kw, location, search_scope, time_range)
                 
                 if not df.empty:
@@ -194,10 +174,11 @@ if mode == "📡 全網掃描 (Live)":
                     st.data_editor(
                         df,
                         column_config={
-                            "Link": st.column_config.LinkColumn("連結", display_text="Go"),
-                            "Date": st.column_config.DateColumn("發布/抓取日", format="YYYY-MM-DD"),
-                            "Title": st.column_config.TextColumn("標題", width="medium"),
-                            "Snippet": st.column_config.TextColumn("摘要", width="large"),
+                            "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
+                            "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
+                            "Type": st.column_config.TextColumn("類型", width="small"),
+                            "Source": st.column_config.TextColumn("來源", width="medium"),
+                            "Title": st.column_config.TextColumn("標題"), # 讓標題自動填滿剩餘空間
                         },
                         use_container_width=True
                     )
