@@ -6,22 +6,18 @@ from datetime import datetime, timedelta
 import altair as alt
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="北美廚電情資中心", page_icon="🍳", layout="wide")
-st.title("🍳 北美廚電情資中心 (Live & Database)")
+st.set_page_config(page_title="Daily Monitoring", page_icon="🍳", layout="wide")
+st.title("🍳 新聞資料庫")
 
 # --- 2. 核心功能函數 ---
 
-# A. 爬蟲函數 (支援多語系精準搜索)
-def fetch_live_news(keyword, lang_code, region):
+# A. 基礎爬蟲函數
+def fetch_rss(keyword, lang, region):
     encoded_keyword = urllib.parse.quote(keyword)
-    
-    # 針對中文搜尋優化：如果是中文模式，強制設定 ceid 為地區:語言
-    if "zh" in lang_code:
-        # 例如搜尋北美華人內容：ceid=US:zh-Hant (繁體中文在美國)
-        target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang_code}&gl={region}&ceid={region}:{lang_code}"
-    else:
-        # 英文模式
-        target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang_code}&gl={region}&ceid={region}:{lang_code.split('-')[0]}"
+    # 組合 Google News RSS URL
+    # 這裡會根據傳入的 lang (例如 zh-TW 或 en-US) 自動調整搜索源
+    ceid_lang = lang.split('-')[0]
+    target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={region}&ceid={region}:{lang}"
     
     feed = feedparser.parse(target_url)
     data = []
@@ -35,11 +31,46 @@ def fetch_live_news(keyword, lang_code, region):
             "Date": pub_date,
             "Title": entry.title,
             "Source": entry.source.title if 'source' in entry else "N/A",
-            "Link": entry.link
+            "Link": entry.link,
+            "Lang": "中文" if "zh" in lang else "English" # 標記來源語言
         })
     return pd.DataFrame(data)
 
-# B. 資料庫讀取
+# B. 整合搜索函數 (這裡就是「中英通吃」的關鍵)
+def fetch_mixed_news(keyword, location_choice):
+    # 定義每個地區要搜哪些語言
+    # 格式: (語言代碼, 地區代碼)
+    tasks = []
+    
+    if location_choice == "🇺🇸 美國 (US)":
+        tasks = [
+            ("en-US", "US"), # 搜美國英文
+            ("zh-TW", "US")  # 搜美國中文 (繁體)
+        ]
+    elif location_choice == "🇨🇦 加拿大 (CA)":
+        tasks = [
+            ("en-CA", "CA"), # 搜加拿大英文
+            ("zh-TW", "CA")  # 搜加拿大中文
+        ]
+
+    # 開始執行雙軌搜索
+    frames = []
+    for lang, region in tasks:
+        df = fetch_rss(keyword, lang, region)
+        frames.append(df)
+    
+    # 合併結果
+    if frames:
+        result_df = pd.concat(frames)
+        # 去除重複 (如果同一篇新聞被重複抓到)
+        result_df = result_df.drop_duplicates(subset=['Link'])
+        # 依照日期排序 (新的在上面)
+        result_df = result_df.sort_values(by='Date', ascending=False)
+        return result_df
+    else:
+        return pd.DataFrame()
+
+# C. 資料庫讀取
 @st.cache_data(ttl=600)
 def load_historical_data(url):
     try:
@@ -49,74 +80,56 @@ def load_historical_data(url):
     except:
         return pd.DataFrame()
 
-# --- 3. 側邊欄：模式切換 ---
+# --- 3. 側邊欄設定 ---
 with st.sidebar:
     st.header("⚙️ 系統設定")
-    mode = st.radio("選擇模式", ["📡 即時偵察 (Live Search)", "🗄️ 歷史資料庫 (Database)"])
+    mode = st.radio("選擇模式", ["📡 即時偵察 (Live)", "🗄️ 歷史資料庫 (DB)"])
     st.divider()
     
-    # 日期篩選 (給資料庫用的)
+    # 日期篩選
     today = datetime.now().date()
-    start_date = st.date_input("資料庫-開始日期", today - timedelta(days=180))
-    end_date = st.date_input("資料庫-結束日期", today)
+    start_date = st.date_input("資料庫-開始", today - timedelta(days=180))
+    end_date = st.date_input("資料庫-結束", today)
 
 # --- 4. 主畫面邏輯 ---
 
-# === 模式一：即時偵察 (Live Search) ===
-if mode == "📡 即時偵察 (Live Search)":
-    st.subheader("📡 即時全網搜索")
-    st.markdown("輸入關鍵字，立即抓取 Google News 最新資料。")
+# === 模式一：即時偵察 (Live) ===
+if mode == "📡 即時偵察 (Live)":
+    st.subheader("📡 全網即時搜索 (中英混合)")
+    st.markdown("輸入關鍵字，系統將自動同時掃描該地區的「英文主流媒體」與「華人社群媒體」。")
     
-    col1, col2 = st.columns([2, 1])
-    
+    col1, col2 = st.columns([3, 1])
     with col1:
-        # 這裡提示使用者可以輸入中文
-        search_kw = st.text_input("輸入關鍵字", placeholder="例如: Range Hood, 抽油煙機, 方太, Fotile...")
-    
+        search_kw = st.text_input("輸入關鍵字", placeholder="例如: Range Hood, 方太, Fotile...")
     with col2:
-        # 這裡是最重要的「語系切換」
-        target_market = st.selectbox(
-            "目標市場/語言", 
-            [
-                "🇺🇸 美國 - 英文媒體 (Mainstream)", 
-                "🇺🇸 美國 - 華人媒體 (Chinese Community)", 
-                "🇨🇦 加拿大 - 英文媒體",
-                "🇹🇼 台灣 - 繁體中文 (測試用)"
-            ]
-        )
+        # 這裡變簡單了！只選地點
+        location = st.selectbox("選擇市場區域", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)"])
     
-    # 設定對應的參數 (語言代碼, 地區代碼)
-    market_map = {
-        "🇺🇸 美國 - 英文媒體 (Mainstream)": ("en-US", "US"),
-        "🇺🇸 美國 - 華人媒體 (Chinese Community)": ("zh-TW", "US"), # 關鍵：在美國搜中文
-        "🇨🇦 加拿大 - 英文媒體": ("en-CA", "CA"),
-        "🇹🇼 台灣 - 繁體中文 (測試用)": ("zh-TW", "TW")
-    }
-    
-    if st.button("🚀 搜尋", type="primary"):
+    if st.button("🚀 開始搜索", type="primary"):
         if search_kw:
-            with st.spinner(f"正在搜尋 '{search_kw}' 的最新情報..."):
-                lang, region = market_map[target_market]
-                live_df = fetch_live_news(search_kw, lang, region)
+            with st.spinner(f"正在同時掃描 {location} 的中英文情報..."):
+                live_df = fetch_mixed_news(search_kw, location)
                 
                 if not live_df.empty:
-                    st.success(f"搜尋完成！在【{target_market}】找到 {len(live_df)} 筆資料")
+                    st.success(f"搜尋完成！找到 {len(live_df)} 筆資料")
+                    
                     st.data_editor(
                         live_df,
                         column_config={
                             "Link": st.column_config.LinkColumn("連結", display_text="點擊閱讀"),
                             "Date": st.column_config.DateColumn("發布時間", format="YYYY-MM-DD HH:mm"),
                             "Title": st.column_config.TextColumn("標題"),
+                            "Lang": st.column_config.TextColumn("語系", width="small"),
                         },
                         use_container_width=True
                     )
                 else:
-                    st.warning(f"找不到關於 '{search_kw}' 的資料。建議：\n1. 檢查關鍵字拼寫\n2. 如果搜中文，請確認右邊已選擇「華人媒體」")
+                    st.warning("找不到資料，請檢查關鍵字。")
         else:
             st.error("請輸入關鍵字！")
 
-# === 模式二：歷史資料庫 (Database) ===
-elif mode == "🗄️ 歷史資料庫 (Database)":
+# === 模式二：歷史資料庫 (DB) ===
+elif mode == "🗄️ 歷史資料庫 (DB)":
     st.subheader("🗄️ 內部輿情資料庫")
     
     # 🔥 請記得把這裡換成你的 CSV 網址 🔥
@@ -125,18 +138,14 @@ elif mode == "🗄️ 歷史資料庫 (Database)":
     df = load_historical_data(sheet_url)
     
     if not df.empty:
-        # 日期篩選
         mask = (df['Date'].dt.date >= start_date) & (df['Date'].dt.date <= end_date)
         filtered_df = df.loc[mask]
         
-        # 關鍵字篩選 (支援中文)
-        db_search = st.text_input("在歷史資料中搜尋...", placeholder="輸入關鍵字 (支援中英文)...")
+        db_search = st.text_input("搜尋歷史資料...", placeholder="輸入關鍵字...")
         if db_search:
-            # case=False 讓英文不分大小寫，中文沒差
             filtered_df = filtered_df[filtered_df['Title'].str.contains(db_search, case=False, na=False)]
             
         st.metric("資料筆數", len(filtered_df))
-        
         st.data_editor(
             filtered_df[['Date', 'Category', 'Title', 'Source', 'Link']],
             column_config={
