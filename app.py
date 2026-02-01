@@ -104,7 +104,7 @@ elif mode == "🗄️ 歷史資料庫 (Database)":
     st.subheader("🗄️ 內部輿情資料庫")
     
     # 🔥 請記得把這裡換成你的 CSV 網址 🔥
-    sheet_url = "你的_GOOGLE_SHEET_CSV_連結"
+    sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQai1zkVJlpDcZhzs76S_JiCsm1JogWxdYlw4vA4k1IeWLHqiReRRY29xQm7ephIk9QJfri7OlvfdmF/pub?output=csv"
     
     df = load_historical_data(sheet_url)
     
