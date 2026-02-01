@@ -6,19 +6,42 @@ from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="全球廚電全網雷達 Pro", page_icon="📡", layout="wide")
-st.title("📡 全球廚電全網雷達 Pro (含時光機)")
+st.set_page_config(page_title="海外無敵", page_icon="📡", layout="wide")
+st.title("📡 海外無敵搜尋引擎")
 
 # --- 2. 核心功能函數 ---
 
-# A. Google News 爬蟲 (僅限近期)
+# A. Google News 爬蟲 (修復版)
 def fetch_google_news(keyword, lang, region):
-    encoded_keyword = urllib.parse.quote(keyword)
+    # --- 關鍵修正：針對北美中文的特殊處理 ---
+    # 如果是在美國/加拿大搜中文，我們不要強制設定 gl=US，因為那會濾掉很多華人媒體
+    # 改為：使用關鍵字限定，但放寬地區限制
+    
+    search_query = keyword
+    target_gl = region
+    target_ceid = f"{region}:{lang.split('-')[0]}"
+    
+    # 特殊邏輯：如果是北美地區的中文搜尋
+    if (region in ["US", "CA"]) and ("zh" in lang):
+        # 1. 自動幫關鍵字加料 (Keyword Injection)
+        if region == "US":
+            search_query = f"{keyword} (美國 OR 北美 OR USA)"
+        elif region == "CA":
+            search_query = f"{keyword} (加拿大 OR Canada OR 温哥华 OR 多伦多)"
+            
+        # 2. 放寬地區設定：改用台灣介面搜，但關鍵字含地區
+        # 這樣最容易搜到世界日報、或是台灣人討論美國生活的文章
+        target_gl = "TW" 
+        target_ceid = "TW:zh-Hant"
+
+    encoded_keyword = urllib.parse.quote(search_query)
+    
+    # 香港維持原樣
     if region == "HK" and "zh" in lang:
-        target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={region}&ceid={region}:zh-Hant"
-    else:
-        ceid_lang = lang.split('-')[0]
-        target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={region}&ceid={region}:{ceid_lang}"
+        target_ceid = "HK:zh-Hant"
+        target_gl = "HK"
+
+    target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={target_gl}&ceid={target_ceid}"
     
     try:
         feed = feedparser.parse(target_url)
@@ -35,12 +58,13 @@ def fetch_google_news(keyword, lang, region):
                 "Title": entry.title,
                 "Source": entry.source.title if 'source' in entry else "Google News",
                 "Link": entry.link,
+                "Snippet": "點擊閱讀全文..."
             })
         return pd.DataFrame(data)
     except:
         return pd.DataFrame()
 
-# B. DuckDuckGo 全網爬蟲 (支援時間回溯)
+# B. DuckDuckGo 全網爬蟲 (修復版)
 def fetch_web_search(keyword, region_code, time_range):
     # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
@@ -48,22 +72,37 @@ def fetch_web_search(keyword, region_code, time_range):
     elif region_code == "HK": ddg_region = "hk-tzh"
     else: ddg_region = "wt-wt"
     
-    # 時間參數轉換 (d=day, w=week, m=month, y=year)
-    # 預設不限時間
+    # 時間參數
     ddg_time = None 
     if time_range == "過去一天": ddg_time = "d"
     elif time_range == "過去一週": ddg_time = "w"
     elif time_range == "過去一個月": ddg_time = "m"
-    elif time_range == "過去一年": ddg_time = "y" # 這是你要的！
+    elif time_range == "過去一年": ddg_time = "y"
     
+    # --- 關鍵修正：DuckDuckGo 的中文搜尋優化 ---
+    # 如果是在美國搜中文，我們不要鎖定 region="us-en" (那會只搜英文網站)
+    # 我們改用全球搜索 (wt-wt)，但是加上地區關鍵字
+    
+    final_keyword = keyword
+    search_region = ddg_region
+    
+    # 判斷是否包含中文字 (簡單判斷)
+    is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
+    
+    if (region_code in ["US", "CA"]) and is_chinese_query:
+        search_region = "wt-wt" # 放寬到全球
+        if region_code == "US":
+            final_keyword = f"{keyword} (美國 OR 北美 OR 華人)"
+        elif region_code == "CA":
+            final_keyword = f"{keyword} (加拿大 OR 温哥華 OR 多倫多)"
+
     try:
-        # 這裡的 max_results 設定多一點 (50筆)，因為我們要挖舊資料
-        results = DDGS().text(keywords=keyword, region=ddg_region, time=ddg_time, max_results=50)
+        results = DDGS().text(keywords=final_keyword, region=search_region, time=ddg_time, max_results=40)
         
         data = []
         for r in results:
             data.append({
-                "Date": datetime.now(), # DDG 不一定回傳精確日期，標記為搜尋日
+                "Date": datetime.now(),
                 "Type": "全網 (Web/Forum)",
                 "Title": r['title'],
                 "Source": urllib.parse.urlparse(r['href']).netloc,
@@ -78,27 +117,27 @@ def fetch_web_search(keyword, region_code, time_range):
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     
+    # 定義任務
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
-        ddg_region = "US"
+        region_code = "US"
     elif location_choice == "🇨🇦 加拿大 (CA)":
         news_tasks = [("en-CA", "CA"), ("zh-TW", "CA")]
-        ddg_region = "CA"
+        region_code = "CA"
     elif location_choice == "🇭🇰 香港 (HK)":
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
-        ddg_region = "HK"
+        region_code = "HK"
     
-    # 1. 新聞 (Google News RSS 不支援長時段回溯，僅跑最新)
+    # 1. 跑新聞
     if "新聞媒體 (News)" in search_types:
-        # 只有在選「不限」或「過去一週/月」時才跑 RSS，不然 RSS 抓不到舊的也沒用
         if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
             for lang, region in news_tasks:
                 df = fetch_google_news(keyword, lang, region)
                 frames.append(df)
             
-    # 2. 全網 (DuckDuckGo 支援時間回溯)
+    # 2. 跑全網
     if "論壇與部落格 (Forums/Blogs)" in search_types:
-        df_web = fetch_web_search(keyword, ddg_region, time_range)
+        df_web = fetch_web_search(keyword, region_code, time_range)
         frames.append(df_web)
 
     if frames:
@@ -129,7 +168,7 @@ with st.sidebar:
 # --- 4. 主畫面 ---
 
 if mode == "📡 全網掃描 (Live)":
-    st.subheader("📡 全球廚電全網掃描 (含歷史回溯)")
+    st.subheader("📡 全球廚電全網掃描 (Pro)")
     
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
@@ -137,11 +176,7 @@ if mode == "📡 全網掃描 (Live)":
     with col2:
         location = st.selectbox("目標市場", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)", "🇭🇰 香港 (HK)"])
     with col3:
-        # 🔥 新功能：時間時光機
-        time_range = st.selectbox(
-            "⏱️ 時間範圍", 
-            ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"]
-        )
+        time_range = st.selectbox("⏱️ 時間範圍", ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"])
         
     search_scope = st.multiselect(
         "選擇搜尋來源",
@@ -149,11 +184,9 @@ if mode == "📡 全網掃描 (Live)":
         default=["新聞媒體 (News)", "論壇與部落格 (Forums/Blogs)"]
     )
     
-    st.info("💡 提示：若想找「半年前」的舊聞，請將時間範圍設為「過去一年」，系統會深入挖掘論壇與庫存頁面。")
-
-    if st.button("🚀 發射雷達", type="primary"):
+    if st.button("🚀 搜尋", type="primary"):
         if search_kw:
-            with st.spinner(f"正在挖掘 {time_range} 關於 '{search_kw}' 的情報..."):
+            with st.spinner(f"正在挖掘 {location} 的中英文情報 (已啟用智慧關鍵字優化)..."):
                 df = run_hybrid_search(search_kw, location, search_scope, time_range)
                 
                 if not df.empty:
@@ -169,13 +202,12 @@ if mode == "📡 全網掃描 (Live)":
                         use_container_width=True
                     )
                 else:
-                    st.warning("未搜尋到結果。")
+                    st.warning("找不到結果。")
         else:
             st.error("請輸入關鍵字")
 
 elif mode == "🗄️ 歷史資料庫":
     st.subheader("🗄️ 內部輿情資料庫")
-    # 🔥 記得換你的 CSV 連結 🔥
     sheet_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQai1zkVJlpDcZhzs76S_JiCsm1JogWxdYlw4vA4k1IeWLHqiReRRY29xQm7ephIk9QJfri7OlvfdmF/pubhtml"
     
     df = load_historical_data(sheet_url)
