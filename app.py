@@ -6,16 +6,14 @@ from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="海外新聞圖書館", page_icon="📡", layout="wide")
-st.title("📡 全海外新聞圖書館 (NA + HK)")
+st.set_page_config(page_title="全球廚電全網雷達 Pro", page_icon="📡", layout="wide")
+st.title("📡 全球廚電全網雷達 Pro (含時光機)")
 
 # --- 2. 核心功能函數 ---
 
-# A. Google News 爬蟲
+# A. Google News 爬蟲 (僅限近期)
 def fetch_google_news(keyword, lang, region):
     encoded_keyword = urllib.parse.quote(keyword)
-    # Google RSS URL 組合邏輯
-    # 香港特別處理: ceid=HK:zh-Hant (中文), ceid=HK:en (英文)
     if region == "HK" and "zh" in lang:
         target_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl={lang}&gl={region}&ceid={region}:zh-Hant"
     else:
@@ -37,29 +35,36 @@ def fetch_google_news(keyword, lang, region):
                 "Title": entry.title,
                 "Source": entry.source.title if 'source' in entry else "Google News",
                 "Link": entry.link,
-                "Snippet": "點擊連結閱讀全文..."
             })
         return pd.DataFrame(data)
-    except Exception as e:
+    except:
         return pd.DataFrame()
 
-# B. DuckDuckGo 全網爬蟲
-def fetch_web_search(keyword, region_code):
-    # 設定 DDG 的地區代碼
+# B. DuckDuckGo 全網爬蟲 (支援時間回溯)
+def fetch_web_search(keyword, region_code, time_range):
+    # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
-    elif region_code == "HK": ddg_region = "hk-tzh" # 香港繁體
+    elif region_code == "HK": ddg_region = "hk-tzh"
     else: ddg_region = "wt-wt"
     
+    # 時間參數轉換 (d=day, w=week, m=month, y=year)
+    # 預設不限時間
+    ddg_time = None 
+    if time_range == "過去一天": ddg_time = "d"
+    elif time_range == "過去一週": ddg_time = "w"
+    elif time_range == "過去一個月": ddg_time = "m"
+    elif time_range == "過去一年": ddg_time = "y" # 這是你要的！
+    
     try:
-        # max_results 設定抓 25 筆，避免太慢
-        results = DDGS().text(keywords=keyword, region=ddg_region, max_results=25)
+        # 這裡的 max_results 設定多一點 (50筆)，因為我們要挖舊資料
+        results = DDGS().text(keywords=keyword, region=ddg_region, time=ddg_time, max_results=50)
         
         data = []
         for r in results:
             data.append({
-                "Date": datetime.now(),
-                "Type": "全網 (Forum/Blog)",
+                "Date": datetime.now(), # DDG 不一定回傳精確日期，標記為搜尋日
+                "Type": "全網 (Web/Forum)",
                 "Title": r['title'],
                 "Source": urllib.parse.urlparse(r['href']).netloc,
                 "Link": r['href'],
@@ -67,14 +72,12 @@ def fetch_web_search(keyword, region_code):
             })
         return pd.DataFrame(data)
     except Exception as e:
-        # st.error(f"全網搜索錯誤: {e}") # 暫時隱藏錯誤訊息讓介面乾淨
         return pd.DataFrame()
 
-# C. 混合搜索控制器 (新增香港邏輯)
-def run_hybrid_search(keyword, location_choice, search_types):
+# C. 混合搜索控制器
+def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     
-    # 定義地區任務清單
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
         ddg_region = "US"
@@ -82,21 +85,20 @@ def run_hybrid_search(keyword, location_choice, search_types):
         news_tasks = [("en-CA", "CA"), ("zh-TW", "CA")]
         ddg_region = "CA"
     elif location_choice == "🇭🇰 香港 (HK)":
-        # 香港：同時搜中文(zh-HK)與英文(en-HK)
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
         ddg_region = "HK"
     
-    # 1. 跑新聞
+    # 1. 新聞 (Google News RSS 不支援長時段回溯，僅跑最新)
     if "新聞媒體 (News)" in search_types:
-        for lang, region in news_tasks:
-            df = fetch_google_news(keyword, lang, region)
-            frames.append(df)
+        # 只有在選「不限」或「過去一週/月」時才跑 RSS，不然 RSS 抓不到舊的也沒用
+        if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
+            for lang, region in news_tasks:
+                df = fetch_google_news(keyword, lang, region)
+                frames.append(df)
             
-    # 2. 跑論壇
+    # 2. 全網 (DuckDuckGo 支援時間回溯)
     if "論壇與部落格 (Forums/Blogs)" in search_types:
-        # 針對香港論壇優化：可以在這裡幫關鍵字加料
-        # 例如: if ddg_region == "HK": keyword += " site:.hk" (這是一個進階技巧，目前先不加)
-        df_web = fetch_web_search(keyword, ddg_region)
+        df_web = fetch_web_search(keyword, ddg_region, time_range)
         frames.append(df_web)
 
     if frames:
@@ -127,15 +129,19 @@ with st.sidebar:
 # --- 4. 主畫面 ---
 
 if mode == "📡 全網掃描 (Live)":
-    st.subheader("📡 全球廚電全網掃描")
-    st.markdown("支援地區：🇺🇸 美國、🇨🇦 加拿大、🇭🇰 香港")
+    st.subheader("📡 全球廚電全網掃描 (含歷史回溯)")
     
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        search_kw = st.text_input("輸入關鍵字", placeholder="例如: 抽油煙機, 洗碗機, Miele, German Pool...")
+        search_kw = st.text_input("輸入關鍵字", placeholder="例如: 抽油煙機, 方太, Robam...")
     with col2:
-        # 新增香港選項
         location = st.selectbox("目標市場", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)", "🇭🇰 香港 (HK)"])
+    with col3:
+        # 🔥 新功能：時間時光機
+        time_range = st.selectbox(
+            "⏱️ 時間範圍", 
+            ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"]
+        )
         
     search_scope = st.multiselect(
         "選擇搜尋來源",
@@ -143,10 +149,12 @@ if mode == "📡 全網掃描 (Live)":
         default=["新聞媒體 (News)", "論壇與部落格 (Forums/Blogs)"]
     )
     
+    st.info("💡 提示：若想找「半年前」的舊聞，請將時間範圍設為「過去一年」，系統會深入挖掘論壇與庫存頁面。")
+
     if st.button("🚀 發射雷達", type="primary"):
         if search_kw:
-            with st.spinner(f"正在掃描 {location} 的相關情報..."):
-                df = run_hybrid_search(search_kw, location, search_scope)
+            with st.spinner(f"正在挖掘 {time_range} 關於 '{search_kw}' 的情報..."):
+                df = run_hybrid_search(search_kw, location, search_scope, time_range)
                 
                 if not df.empty:
                     st.success(f"掃描完成！共發現 {len(df)} 筆情報")
@@ -154,15 +162,14 @@ if mode == "📡 全網掃描 (Live)":
                         df,
                         column_config={
                             "Link": st.column_config.LinkColumn("連結", display_text="Go"),
-                            "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
+                            "Date": st.column_config.DateColumn("發布/抓取日", format="YYYY-MM-DD"),
                             "Title": st.column_config.TextColumn("標題", width="medium"),
-                            "Type": st.column_config.TextColumn("來源", width="small"),
                             "Snippet": st.column_config.TextColumn("摘要", width="large"),
                         },
                         use_container_width=True
                     )
                 else:
-                    st.warning("未搜尋到結果。建議：\n1. 香港搜尋建議用繁體中文\n2. 試著搜尋當地品牌 (如: German Pool, 德國寶)")
+                    st.warning("未搜尋到結果。")
         else:
             st.error("請輸入關鍵字")
 
@@ -182,4 +189,4 @@ elif mode == "🗄️ 歷史資料庫":
             
         st.data_editor(filtered_df, use_container_width=True, hide_index=True)
     else:
-        st.error("無法讀取資料庫，請檢查 CSV 網址")
+        st.error("無法讀取資料庫")
