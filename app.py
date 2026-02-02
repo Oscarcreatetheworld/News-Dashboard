@@ -56,25 +56,22 @@ def fetch_google_news(keyword, lang, region):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# B. 通用全網/特定平台爬蟲 (DuckDuckGo - 修復版)
+# B. 通用全網/特定平台爬蟲 (DuckDuckGo)
 def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
-    # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
     elif region_code == "HK": ddg_region = "hk-tzh"
     else: ddg_region = "wt-wt"
     
-    # 時間轉換
     ddg_time = None 
     if time_range == "過去一天": ddg_time = "d"
     elif time_range == "過去一週": ddg_time = "w"
     elif time_range == "過去一個月": ddg_time = "m"
     elif time_range == "過去一年": ddg_time = "y"
     
-    # 關鍵字處理
     final_keyword = keyword
     search_region = ddg_region
-    source_type = "🌐 全網" # 預設
+    source_type = "🌐 全網"
 
     if platform_mode == "reddit":
         final_keyword = f"{keyword} site:reddit.com"
@@ -91,25 +88,15 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
             elif region_code == "CA": final_keyword = f"{keyword} (加拿大 OR 温哥華 OR 多倫多)"
 
     try:
-        # 執行搜索
         results = DDGS().text(keywords=final_keyword, region=search_region, time=ddg_time, max_results=30)
         data = []
-        
-        # --- 🔥 關鍵修復：安全讀取資料，防止 KeyError ---
         if results:
             for r in results:
-                # 使用 .get() 避免報錯，如果沒有欄位就給空字串
                 link = r.get('href', '')
                 title = r.get('title', '')
-                
-                # 只有當連結與標題都存在時才加入
                 if link and title:
-                    # 嘗試解析 Source，失敗則給預設值
-                    try:
-                        source_domain = urllib.parse.urlparse(link).netloc
-                    except:
-                        source_domain = "Web"
-
+                    try: source_domain = urllib.parse.urlparse(link).netloc
+                    except: source_domain = "Web"
                     data.append({
                         "Select": False,
                         "Date": datetime.now(),
@@ -120,14 +107,14 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
                     })
         return pd.DataFrame(data)
     except Exception as e:
-        # 在後台印出錯誤，但不讓網頁當機
-        print(f"Error in DDGS: {e}") 
+        print(f"Error: {e}")
         return pd.DataFrame()
 
-# C. 混合搜索控制器
+# C. 混合搜索控制器 (🔥 重點修復區)
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     
+    # 定義任務
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
         region_code = "US"
@@ -138,6 +125,7 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
         region_code = "HK"
     
+    # 執行任務
     if "新聞媒體 (News)" in search_types:
         if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
             for lang, region in news_tasks:
@@ -152,11 +140,26 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
     if "Pinterest 靈感" in search_types:
         frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode="pinterest"))
 
+    # 合併結果 (🔥 這裡加了防呆機制)
     if frames:
-        result = pd.concat(frames).drop_duplicates(subset=['Link'])
+        result = pd.concat(frames)
+        
+        # 1. 如果合併出來是空的 (全軍覆沒)，直接回傳空表，不要往下跑
+        if result.empty:
+            return pd.DataFrame(columns=['Select', 'Type', 'Date', 'Title', 'Link', 'Source'])
+            
+        # 2. 如果因為某些原因 Select 欄位不見了，把它加回去
+        if 'Select' not in result.columns:
+            result['Select'] = False
+
+        result = result.drop_duplicates(subset=['Link'])
+        
+        # 3. 安全地排序欄位
         cols = ['Select'] + [c for c in result.columns if c != 'Select']
         return result[cols]
-    else: return pd.DataFrame()
+    else:
+        # 如果根本沒有任務執行
+        return pd.DataFrame(columns=['Select', 'Type', 'Date', 'Title', 'Link', 'Source'])
 
 # --- 4. 側邊欄導航 ---
 with st.sidebar:
@@ -196,68 +199,3 @@ if page == "🔍 情報搜尋":
         if search_kw:
             with st.spinner("正在各大平台掃描中..."):
                 st.session_state.search_results = run_hybrid_search(search_kw, location, search_scope, time_range)
-
-    if not st.session_state.search_results.empty:
-        st.divider()
-        st.markdown(f"### 📋 搜尋結果 ({len(st.session_state.search_results)} 筆)")
-        
-        target_folder = st.selectbox("📥 存入資料夾:", st.session_state.folder_list)
-        
-        edited_df = st.data_editor(
-            st.session_state.search_results,
-            column_config={
-                "Select": st.column_config.CheckboxColumn("收藏", width="small"),
-                "Type": st.column_config.TextColumn("來源類型", width="small"),
-                "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
-                "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
-                "Title": st.column_config.TextColumn("標題"),
-            },
-            use_container_width=True,
-            hide_index=True,
-            key="search_editor"
-        )
-        
-        if st.button(f"⬇️ 加入「{target_folder}」"):
-            selected_rows = edited_df[edited_df['Select'] == True].copy()
-            if not selected_rows.empty:
-                selected_rows['Folder'] = target_folder
-                to_add = selected_rows.drop(columns=['Select'])
-                st.session_state.favorites = pd.concat([st.session_state.favorites, to_add]).drop_duplicates(subset=['Link'])
-                st.success(f"已存入 {target_folder}！")
-            else:
-                st.warning("請先勾選資料！")
-
-elif page == "📂 競品資料夾":
-    st.title("📂 競品情報資料庫")
-    
-    if st.session_state.favorites.empty:
-        st.info("目前資料庫是空的。")
-    else:
-        active_folders = [f for f in st.session_state.folder_list]
-        tabs = st.tabs(active_folders)
-
-        for i, folder_name in enumerate(active_folders):
-            with tabs[i]:
-                folder_data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
-                
-                if not folder_data.empty:
-                    st.write(f"📁 **{folder_name}** ({len(folder_data)} 筆)")
-                    st.dataframe(
-                        folder_data[['Type', 'Date', 'Title', 'Link']],
-                        column_config={
-                            "Link": st.column_config.LinkColumn("連結", display_text="Go"),
-                            "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
-                            "Type": st.column_config.TextColumn("類型", width="small"),
-                        },
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    csv = folder_data.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(label="📥 下載 CSV", data=csv, file_name=f'{folder_name}.csv', mime='text/csv')
-                    
-                    if st.button(f"🗑️ 清空此資料夾", key=f"del_{i}"):
-                        st.session_state.favorites = st.session_state.favorites[st.session_state.favorites['Folder'] != folder_name]
-                        st.rerun()
-                else:
-                    st.info("無資料。")
