@@ -252,11 +252,13 @@ elif page == "💰 競品比價中心 (New)":
         st.link_button("Go to Store", "https://robamliving.com/collections/range-hood")
     with col3:
         st.markdown("**🇺🇸 太平洋 (Pacific)**")
-        st.link_button("Go to Store", "https://pacific-kitchen.com/shop/")
+        st.link_button("Go to Store", "https://www.2pacific.com/zh-cn/")
     with col4:
         st.markdown("**🇺🇸 Hauslane**")
         st.link_button("Go to Store", "https://hauslane.com/collections/range-hoods")
-
+    with col5:
+        st.markdown("**🇺🇸 Le Kitchen**")
+        st.link_button("Go to Store", "https://www.lekitcheninc.com/")
     st.divider()
 
     # 2. 型號全網查價
