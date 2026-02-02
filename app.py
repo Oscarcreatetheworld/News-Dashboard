@@ -4,7 +4,7 @@ import feedparser
 import urllib.parse
 from datetime import datetime
 from duckduckgo_search import DDGS
-from pytrends.request import TrendReq # 引入 Google Trends 工具
+from pytrends.request import TrendReq
 
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="全球廚電情報中心 Ultimate", page_icon="🍳", layout="wide")
@@ -21,7 +21,7 @@ if 'search_results' not in st.session_state:
 
 # --- 3. 爬蟲函數群 ---
 
-# A. Google News (新聞)
+# A. Google News
 def fetch_google_news(keyword, lang, region):
     search_query = keyword
     target_gl = region
@@ -60,7 +60,7 @@ def fetch_google_news(keyword, lang, region):
         else: return pd.DataFrame()
     except: return pd.DataFrame()
 
-# B. DuckDuckGo (全網)
+# B. DuckDuckGo (一般 & 比價用)
 def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
@@ -83,6 +83,10 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     elif platform_mode == "pinterest":
         final_keyword = f"{keyword} site:pinterest.com"
         source_type = "📌 Pinterest"
+    elif platform_mode == "shopping": # 新增：查價模式
+        # 強制加上 price 關鍵字，並排除一些無關資訊
+        final_keyword = f"{keyword} price (buy OR shop OR deal)"
+        source_type = "💰 價格情報"
     else:
         source_type = "🌐 論壇/部落格"
         is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
@@ -148,43 +152,30 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         if 'Select' not in result.columns: result['Select'] = False
         result = result.drop_duplicates(subset=['Link'])
         cols = ['Select'] + [c for c in result.columns if c != 'Select']
-        # 只保留存在的欄位
-        final_cols = [c for c in ['Select', 'Type', 'Date', 'Title', 'Link', 'Source'] if c in result.columns]
-        return result[final_cols]
+        return result[cols]
     else: return pd.DataFrame(columns=['Select', 'Type', 'Date', 'Title', 'Link', 'Source'])
 
-# D. Google Trends 函數 (新增)
+# D. Google Trends
 def fetch_trends_data(keywords, geo='US', timeframe='today 12-m'):
     try:
-        # 初始化 pytrends
         pytrends = TrendReq(hl='en-US', tz=360, timeout=(10,25))
-        # 建立 payload
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo)
-        
-        # 1. 抓取時間趨勢
         interest_over_time_df = pytrends.interest_over_time()
-        if not interest_over_time_df.empty:
-            if 'isPartial' in interest_over_time_df.columns:
-                interest_over_time_df = interest_over_time_df.drop(columns=['isPartial'])
-        
-        # 2. 抓取相關搜尋 (只抓第一個關鍵字的)
+        if not interest_over_time_df.empty and 'isPartial' in interest_over_time_df.columns:
+            interest_over_time_df = interest_over_time_df.drop(columns=['isPartial'])
         related_queries = pytrends.related_queries()
         related_df = pd.DataFrame()
-        if related_queries:
-            primary_kw = keywords[0]
-            if related_queries[primary_kw]['top'] is not None:
-                related_df = related_queries[primary_kw]['top'].head(10)
-                
+        if related_queries and keywords[0] in related_queries and related_queries[keywords[0]]['top'] is not None:
+            related_df = related_queries[keywords[0]]['top'].head(10)
         return interest_over_time_df, related_df
     except Exception as e:
-        st.error(f"連線 Google Trends 失敗 (可能為暫時性阻擋): {e}")
         return pd.DataFrame(), pd.DataFrame()
 
 # --- 4. 側邊欄導航 ---
 with st.sidebar:
     st.title("🗂️ 系統導航")
-    # 新增第三個選項
-    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀 (New)", "📂 競品資料夾"])
+    # 新增第四個選項
+    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀", "💰 競品比價中心 (New)", "📂 競品資料夾"])
     st.divider()
     
     st.subheader("⚙️ 資料夾管理")
@@ -224,52 +215,80 @@ if page == "🔍 情報搜尋":
                 st.success(f"已存入 {target_folder}！")
             else: st.warning("請先勾選資料！")
 
-# === 新增：趨勢分析頁面 ===
-elif page == "📈 趨勢分析儀 (New)":
+elif page == "📈 趨勢分析儀":
     st.title("📈 Google 趨勢分析儀")
-    st.markdown("直接調用 Google Trends 數據，比較關鍵字在一段時間內的熱度變化。")
-    
+    st.markdown("比較關鍵字在一段時間內的熱度變化。")
     col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        # 讓使用者輸入多個關鍵字，用逗號分隔
-        trend_input = st.text_input("輸入關鍵字 (可多個，用逗號分隔)", "Fotile, Robam, Pacific")
-    with col2:
-        trend_geo = st.selectbox("地區", ["US", "CA", "HK"], format_func=lambda x: f"地區: {x}")
-    with col3:
-        trend_time = st.selectbox("時間範圍", ["today 12-m", "today 1-m", "today 5-y"], format_func=lambda x: {"today 12-m":"過去 12 個月", "today 1-m":"過去 30 天", "today 5-y":"過去 5 年"}[x])
-        
+    with col1: trend_input = st.text_input("輸入關鍵字 (可多個，用逗號分隔)", "Fotile, Robam, Pacific")
+    with col2: trend_geo = st.selectbox("地區", ["US", "CA", "HK"])
+    with col3: trend_time = st.selectbox("時間範圍", ["today 12-m", "today 1-m", "today 5-y"])
     if st.button("📊 分析趨勢", type="primary"):
-        # 處理關鍵字列表
         kw_list = [k.strip() for k in trend_input.split(",") if k.strip()]
-        
         if kw_list:
-            with st.spinner(f"正在向 Google 請求 {kw_list} 的數據..."):
+            with st.spinner(f"正在分析 {kw_list} ..."):
                 trend_df, related_df = fetch_trends_data(kw_list, trend_geo, trend_time)
-                
                 if not trend_df.empty:
-                    st.success("數據獲取成功！")
-                    
-                    # 1. 畫出折線圖
-                    st.subheader("🔥 聲量熱度走勢 (Interest Over Time)")
                     st.line_chart(trend_df)
-                    st.caption("數值 100 代表該關鍵字在該時段內的最高熱度。")
-                    
-                    # 2. 相關搜尋
                     if not related_df.empty:
-                        st.divider()
                         st.subheader(f"💡 搜「{kw_list[0]}」的人也搜了...")
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            st.dataframe(related_df, use_container_width=True)
-                        with col_b:
-                            st.info("這些詞彙代表潛在的消費者痛點或競品，建議也可以加入搜尋關鍵字中！")
+                        st.dataframe(related_df, use_container_width=True)
+                else: st.link_button("👉 前往 Google Trends 官網 (備用)", f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}")
+
+# === 新增：競品比價中心 ===
+elif page == "💰 競品比價中心 (New)":
+    st.title("💰 競品比價中心 (Price Monitor)")
+    st.markdown("快速查看競品官網價格，或搜尋特定型號的通路售價。")
+    
+    # 1. 官網快速傳送門 (靜態連結)
+    st.subheader("🚀 官網快速傳送門 (Quick Links)")
+    st.info("點擊按鈕直接開啟競品「抽油煙機/廚電」商店頁面")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown("**🇺🇸 方太 (Fotile)**")
+        st.link_button("Go to Store", "https://us.fotileglobal.com/collections/range-hoods")
+    with col2:
+        st.markdown("**🇺🇸 老闆 (Robam)**")
+        st.link_button("Go to Store", "https://robamliving.com/collections/range-hood")
+    with col3:
+        st.markdown("**🇺🇸 太平洋 (Pacific)**")
+        st.link_button("Go to Store", "https://pacific-kitchen.com/shop/")
+    with col4:
+        st.markdown("**🇺🇸 Hauslane**")
+        st.link_button("Go to Store", "https://hauslane.com/collections/range-hoods")
+
+    st.divider()
+
+    # 2. 型號全網查價
+    st.subheader("🔎 特定型號查價")
+    st.caption("輸入型號，系統會搜尋 Amazon, Best Buy, Home Depot 等通路的價格頁面。")
+    
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        price_kw = st.text_input("輸入產品型號", placeholder="例如: JQG7501, A831, UC-PS18...")
+    with col_b:
+        price_region = st.selectbox("查價地區", ["US", "CA"])
+    
+    if st.button("💰 搜尋價格情報"):
+        if price_kw:
+            with st.spinner(f"正在搜尋 {price_kw} 的價格資訊..."):
+                # 使用特殊的 shopping 模式
+                price_df = fetch_web_search(price_kw, price_region, "過去一個月", platform_mode="shopping")
+                
+                if not price_df.empty:
+                    st.success(f"找到 {len(price_df)} 筆相關價格頁面")
+                    st.dataframe(
+                        price_df[['Title', 'Source', 'Link']],
+                        column_config={
+                            "Link": st.column_config.LinkColumn("點擊查價", display_text="Go ->"),
+                            "Source": st.column_config.TextColumn("通路/來源"),
+                            "Title": st.column_config.TextColumn("商品標題"),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
                 else:
-                    st.warning("⚠️ 暫時無法獲取數據 (Google 可能暫時阻擋了請求)。")
-                    # 提供備用方案
-                    direct_url = f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}"
-                    st.link_button("👉 點此直接前往 Google Trends 官網查看", direct_url)
-        else:
-            st.error("請至少輸入一個關鍵字！")
+                    st.warning("找不到明確的價格頁面，建議直接點擊上方官網查詢。")
 
 elif page == "📂 競品資料夾":
     st.title("📂 競品情報資料庫")
