@@ -283,4 +283,48 @@ elif page == "📈 趨勢分析儀":
                         st.dataframe(related_df, use_container_width=True)
                 else: st.link_button("👉 前往 Google Trends 官網 (備用)", f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}")
 
-elif page ==
+elif page == "💰 競品比價中心":
+    st.title("💰 競品比價中心")
+    st.subheader("🚀 官網快速傳送門")
+    col1, col2, col3, col4, col5, col16, col17 = st.columns(7)
+    with col1: st.link_button("SAKURA USA", "https://sakura-usa.com/en-tw")
+    with col2: st.link_button("SAKURA CA", "https://sakura-canada.com/")
+    with col3: st.link_button("Fotile Store", "https://us.fotileglobal.com/collections/range-hoods")
+    with col4: st.link_button("Robam Store", "https://robamliving.com/collections/range-hood")
+    with col5: st.link_button("Pacific Store", "https://pacific-kitchen.com/shop/")
+    with col6: st.link_button("Hauslane Store", "https://hauslane.com/collections/range-hoods")
+    with col7: st.link_button("Le Kitchen", "https://www.lekitcheninc.com/")
+    st.divider()
+    st.subheader("🔎 特定型號查價")
+    col_a, col_b = st.columns([3, 1])
+    with col_a: price_kw = st.text_input("輸入產品型號", placeholder="例如: JQG7501, A831...")
+    with col_b: price_region = st.selectbox("查價地區", ["US", "CA"])
+    if st.button("💰 搜尋價格"):
+        if price_kw:
+            with st.spinner(f"正在搜尋 {price_kw}..."):
+                price_df = fetch_web_search(price_kw, price_region, "過去一個月", platform_mode="shopping")
+                if not price_df.empty:
+                    st.dataframe(price_df[['Title', 'Source', 'Link']], column_config={"Link": st.column_config.LinkColumn("點擊查價", display_text="Go ->")}, use_container_width=True, hide_index=True)
+                else: st.warning("找不到明確價格，建議查閱官網。")
+
+elif page == "📂 競品資料夾":
+    st.title("📂 競品情報資料庫")
+    if st.session_state.favorites.empty: st.info("目前資料庫是空的。")
+    else:
+        active_folders = [f for f in st.session_state.folder_list]
+        tabs = st.tabs(active_folders)
+        for i, folder_name in enumerate(active_folders):
+            with tabs[i]:
+                folder_data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
+                if not folder_data.empty:
+                    st.write(f"📁 **{folder_name}** ({len(folder_data)} 筆)")
+                    # 這裡也把 Keyword 欄位秀出來
+                    cols_to_show = ['Keyword', 'Type', 'Date', 'Title', 'Link'] if 'Keyword' in folder_data.columns else ['Type', 'Date', 'Title', 'Link']
+                    
+                    st.dataframe(folder_data[cols_to_show], column_config={"Link": st.column_config.LinkColumn("連結", display_text="Go"), "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD")}, use_container_width=True, hide_index=True)
+                    csv = folder_data.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(label="📥 下載 CSV", data=csv, file_name=f'{folder_name}.csv', mime='text/csv')
+                    if st.button(f"🗑️ 清空此資料夾", key=f"del_{i}"):
+                        st.session_state.favorites = st.session_state.favorites[st.session_state.favorites['Folder'] != folder_name]
+                        st.rerun()
+                else: st.info("無資料。")
