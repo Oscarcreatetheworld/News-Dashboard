@@ -259,6 +259,7 @@ elif page == "💰 競品比價中心 (New)":
     with col5:
         st.markdown("**🇺🇸 Le Kitchen**")
         st.link_button("Go to Store", "https://www.lekitcheninc.com/")
+        
     st.divider()
 
     # 2. 型號全網查價
