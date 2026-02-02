@@ -18,7 +18,7 @@ if 'folder_list' not in st.session_state:
 if 'search_results' not in st.session_state:
     st.session_state.search_results = pd.DataFrame()
 
-# --- 3. 爬蟲函數群 (新增平台專用邏輯) ---
+# --- 3. 爬蟲函數群 ---
 
 # A. 新聞爬蟲 (Google News)
 def fetch_google_news(keyword, lang, region):
@@ -26,14 +26,12 @@ def fetch_google_news(keyword, lang, region):
     target_gl = region
     target_ceid = f"{region}:{lang.split('-')[0]}"
     
-    # 北美中文優化
     if (region in ["US", "CA"]) and ("zh" in lang):
         if region == "US": search_query = f"{keyword} (美國 OR 北美 OR USA)"
         elif region == "CA": search_query = f"{keyword} (加拿大 OR Canada OR 温哥华 OR 多伦多)"
         target_gl = "TW"
         target_ceid = "TW:zh-Hant"
 
-    # 香港優化
     if region == "HK" and "zh" in lang:
         target_ceid = "HK:zh-Hant"
         target_gl = "HK"
@@ -58,7 +56,7 @@ def fetch_google_news(keyword, lang, region):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# B. 通用全網/特定平台爬蟲 (DuckDuckGo)
+# B. 通用全網/特定平台爬蟲 (DuckDuckGo - 修復版)
 def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
@@ -76,8 +74,8 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     # 關鍵字處理
     final_keyword = keyword
     search_region = ddg_region
-    
-    # 1. 平台鎖定邏輯 (關鍵！)
+    source_type = "🌐 全網" # 預設
+
     if platform_mode == "reddit":
         final_keyword = f"{keyword} site:reddit.com"
         source_type = "💬 Reddit"
@@ -85,9 +83,7 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
         final_keyword = f"{keyword} site:pinterest.com"
         source_type = "📌 Pinterest"
     else:
-        # 一般部落格/論壇模式
-        source_type = "🌐 全網/部落格"
-        # 北美中文優化
+        source_type = "🌐 論壇/部落格"
         is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
         if (region_code in ["US", "CA"]) and is_chinese_query:
             search_region = "wt-wt"
@@ -98,23 +94,40 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
         # 執行搜索
         results = DDGS().text(keywords=final_keyword, region=search_region, time=ddg_time, max_results=30)
         data = []
-        for r in results:
-            data.append({
-                "Select": False,
-                "Date": datetime.now(),
-                "Type": source_type,
-                "Title": r['title'],
-                "Source": urllib.parse.urlparse(r['href']).netloc, # 抓網域名稱
-                "Link": r['href']
-            })
+        
+        # --- 🔥 關鍵修復：安全讀取資料，防止 KeyError ---
+        if results:
+            for r in results:
+                # 使用 .get() 避免報錯，如果沒有欄位就給空字串
+                link = r.get('href', '')
+                title = r.get('title', '')
+                
+                # 只有當連結與標題都存在時才加入
+                if link and title:
+                    # 嘗試解析 Source，失敗則給預設值
+                    try:
+                        source_domain = urllib.parse.urlparse(link).netloc
+                    except:
+                        source_domain = "Web"
+
+                    data.append({
+                        "Select": False,
+                        "Date": datetime.now(),
+                        "Type": source_type,
+                        "Title": title,
+                        "Source": source_domain,
+                        "Link": link
+                    })
         return pd.DataFrame(data)
-    except: return pd.DataFrame()
+    except Exception as e:
+        # 在後台印出錯誤，但不讓網頁當機
+        print(f"Error in DDGS: {e}") 
+        return pd.DataFrame()
 
 # C. 混合搜索控制器
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     
-    # 地區設定
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
         region_code = "US"
@@ -125,21 +138,17 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
         region_code = "HK"
     
-    # 1. 新聞搜索
     if "新聞媒體 (News)" in search_types:
         if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
             for lang, region in news_tasks:
                 frames.append(fetch_google_news(keyword, lang, region))
             
-    # 2. 一般全網搜索
     if "論壇與部落格 (Web/Blogs)" in search_types:
         frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode=None))
 
-    # 3. Reddit 專屬搜索
     if "Reddit 討論區" in search_types:
         frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode="reddit"))
 
-    # 4. Pinterest 專屬搜索
     if "Pinterest 靈感" in search_types:
         frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode="pinterest"))
 
@@ -166,7 +175,6 @@ with st.sidebar:
 
 # --- 5. 頁面邏輯 ---
 
-# === 頁面 A: 情報搜尋 ===
 if page == "🔍 情報搜尋":
     st.title("🔍 情報搜尋")
     
@@ -178,7 +186,6 @@ if page == "🔍 情報搜尋":
     with col3:
         time_range = st.selectbox("時間範圍", ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"])
 
-    # 這裡新增了 Reddit 和 Pinterest 選項
     search_scope = st.multiselect(
         "選擇搜尋頻道", 
         ["新聞媒體 (News)", "論壇與部落格 (Web/Blogs)", "Reddit 討論區", "Pinterest 靈感"],
@@ -220,7 +227,6 @@ if page == "🔍 情報搜尋":
             else:
                 st.warning("請先勾選資料！")
 
-# === 頁面 B: 競品資料夾 ===
 elif page == "📂 競品資料夾":
     st.title("📂 競品情報資料庫")
     
