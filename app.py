@@ -5,34 +5,35 @@ import urllib.parse
 from datetime import datetime
 from duckduckgo_search import DDGS
 
-# --- 1. 頁面與基礎設定 ---
-st.set_page_config(page_title="全球廚電情報中心", page_icon="🗂️", layout="wide")
+# --- 1. 頁面設定 ---
+st.set_page_config(page_title="全球廚電情報中心 Pro", page_icon="🍳", layout="wide")
 
-# --- 2. Session State 初始化 (資料庫與資料夾結構) ---
-# 這是這個 App 的記憶體
+# --- 2. Session State 初始化 ---
 if 'favorites' not in st.session_state:
-    # 建立一個空的資料框，多了一個 'Folder' 欄位
     st.session_state.favorites = pd.DataFrame(columns=['Folder', 'Date', 'Title', 'Link', 'Source'])
 
 if 'folder_list' not in st.session_state:
-    # 預設的資料夾 (你可以自己改)
-    st.session_state.folder_list = ["📥 未分類", "🔥 方太 (Fotile)", "🔥 老闆 (Robam)", "🇪🇺 歐系品牌", "🇰🇷 韓系品牌"]
+    st.session_state.folder_list = ["📥 未分類", "🔥 方太 (Fotile)", "🔥 老闆 (Robam)", "🇪🇺 歐系品牌", "🇺🇸 美系品牌"]
 
 if 'search_results' not in st.session_state:
     st.session_state.search_results = pd.DataFrame()
 
-# --- 3. 爬蟲函數 (維持不變，功能最強大) ---
+# --- 3. 爬蟲函數群 (新增平台專用邏輯) ---
+
+# A. 新聞爬蟲 (Google News)
 def fetch_google_news(keyword, lang, region):
     search_query = keyword
     target_gl = region
     target_ceid = f"{region}:{lang.split('-')[0]}"
     
+    # 北美中文優化
     if (region in ["US", "CA"]) and ("zh" in lang):
         if region == "US": search_query = f"{keyword} (美國 OR 北美 OR USA)"
         elif region == "CA": search_query = f"{keyword} (加拿大 OR Canada OR 温哥华 OR 多伦多)"
         target_gl = "TW"
         target_ceid = "TW:zh-Hant"
 
+    # 香港優化
     if region == "HK" and "zh" in lang:
         target_ceid = "HK:zh-Hant"
         target_gl = "HK"
@@ -49,7 +50,7 @@ def fetch_google_news(keyword, lang, region):
             data.append({
                 "Select": False,
                 "Date": pub_date,
-                "Type": "新聞",
+                "Type": "📰 新聞",
                 "Title": entry.title,
                 "Source": entry.source.title if 'source' in entry else "Google News",
                 "Link": entry.link
@@ -57,44 +58,63 @@ def fetch_google_news(keyword, lang, region):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-def fetch_web_search(keyword, region_code, time_range):
+# B. 通用全網/特定平台爬蟲 (DuckDuckGo)
+def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
+    # region_code 轉換
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
     elif region_code == "HK": ddg_region = "hk-tzh"
     else: ddg_region = "wt-wt"
     
+    # 時間轉換
     ddg_time = None 
     if time_range == "過去一天": ddg_time = "d"
     elif time_range == "過去一週": ddg_time = "w"
     elif time_range == "過去一個月": ddg_time = "m"
     elif time_range == "過去一年": ddg_time = "y"
     
+    # 關鍵字處理
     final_keyword = keyword
     search_region = ddg_region
-    is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
     
-    if (region_code in ["US", "CA"]) and is_chinese_query:
-        search_region = "wt-wt"
-        if region_code == "US": final_keyword = f"{keyword} (美國 OR 北美 OR 華人)"
-        elif region_code == "CA": final_keyword = f"{keyword} (加拿大 OR 温哥華 OR 多倫多)"
+    # 1. 平台鎖定邏輯 (關鍵！)
+    if platform_mode == "reddit":
+        final_keyword = f"{keyword} site:reddit.com"
+        source_type = "💬 Reddit"
+    elif platform_mode == "pinterest":
+        final_keyword = f"{keyword} site:pinterest.com"
+        source_type = "📌 Pinterest"
+    else:
+        # 一般部落格/論壇模式
+        source_type = "🌐 全網/部落格"
+        # 北美中文優化
+        is_chinese_query = any(u'\u4e00' <= c <= u'\u9fff' for c in keyword)
+        if (region_code in ["US", "CA"]) and is_chinese_query:
+            search_region = "wt-wt"
+            if region_code == "US": final_keyword = f"{keyword} (美國 OR 北美 OR 華人)"
+            elif region_code == "CA": final_keyword = f"{keyword} (加拿大 OR 温哥華 OR 多倫多)"
 
     try:
-        results = DDGS().text(keywords=final_keyword, region=search_region, time=ddg_time, max_results=40)
+        # 執行搜索
+        results = DDGS().text(keywords=final_keyword, region=search_region, time=ddg_time, max_results=30)
         data = []
         for r in results:
             data.append({
                 "Select": False,
                 "Date": datetime.now(),
-                "Type": "全網",
+                "Type": source_type,
                 "Title": r['title'],
-                "Source": urllib.parse.urlparse(r['href']).netloc,
+                "Source": urllib.parse.urlparse(r['href']).netloc, # 抓網域名稱
                 "Link": r['href']
             })
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
+# C. 混合搜索控制器
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
+    
+    # 地區設定
     if location_choice == "🇺🇸 美國 (US)":
         news_tasks = [("en-US", "US"), ("zh-TW", "US")]
         region_code = "US"
@@ -105,12 +125,23 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         news_tasks = [("zh-HK", "HK"), ("en-HK", "HK")]
         region_code = "HK"
     
+    # 1. 新聞搜索
     if "新聞媒體 (News)" in search_types:
         if time_range in ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月"]:
             for lang, region in news_tasks:
                 frames.append(fetch_google_news(keyword, lang, region))
-    if "論壇與部落格 (Forums/Blogs)" in search_types:
-        frames.append(fetch_web_search(keyword, region_code, time_range))
+            
+    # 2. 一般全網搜索
+    if "論壇與部落格 (Web/Blogs)" in search_types:
+        frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode=None))
+
+    # 3. Reddit 專屬搜索
+    if "Reddit 討論區" in search_types:
+        frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode="reddit"))
+
+    # 4. Pinterest 專屬搜索
+    if "Pinterest 靈感" in search_types:
+        frames.append(fetch_web_search(keyword, region_code, time_range, platform_mode="pinterest"))
 
     if frames:
         result = pd.concat(frames).drop_duplicates(subset=['Link'])
@@ -118,62 +149,58 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         return result[cols]
     else: return pd.DataFrame()
 
-# --- 4. 側邊欄導航 (Sidebar Navigation) ---
+# --- 4. 側邊欄導航 ---
 with st.sidebar:
     st.title("🗂️ 系統導航")
-    page = st.radio("前往專區", ["🔍 情報搜尋專區", "📂 競品資料夾 (精選)"])
-    
+    page = st.radio("前往專區", ["🔍 情報搜尋", "📂 競品資料夾"])
     st.divider()
     
-    # 資料夾管理功能 (不論在哪一頁都能管理)
     st.subheader("⚙️ 資料夾管理")
-    new_folder = st.text_input("新增資料夾名稱", placeholder="例如: Samsung")
+    new_folder = st.text_input("新增資料夾", placeholder="例如: Pinterest 靈感板")
     if st.button("➕ 新增"):
         if new_folder and new_folder not in st.session_state.folder_list:
             st.session_state.folder_list.append(new_folder)
             st.success(f"已新增: {new_folder}")
             st.rerun()
-            
-    st.divider()
-    st.caption(f"目前資料庫總筆數: {len(st.session_state.favorites)}")
+    st.caption(f"已收藏: {len(st.session_state.favorites)} 筆")
 
 # --- 5. 頁面邏輯 ---
 
-# === 頁面 A: 情報搜尋專區 ===
-if page == "🔍 情報搜尋專區":
-    st.title("🔍 情報搜尋專區")
-    st.caption("在此處搜尋全網情報，勾選後「分發」到指定的競品資料夾中。")
-
+# === 頁面 A: 情報搜尋 ===
+if page == "🔍 情報搜尋":
+    st.title("🔍 情報搜尋")
+    
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        search_kw = st.text_input("輸入關鍵字", placeholder="例如: Range Hood, 方太, Robam...")
+        search_kw = st.text_input("輸入關鍵字", placeholder="例如: Kitchen Island Ideas, Range Hood...")
     with col2:
         location = st.selectbox("目標市場", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)", "🇭🇰 香港 (HK)"])
     with col3:
         time_range = st.selectbox("時間範圍", ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"])
 
+    # 這裡新增了 Reddit 和 Pinterest 選項
     search_scope = st.multiselect(
-        "搜尋來源", ["新聞媒體 (News)", "論壇與部落格 (Forums/Blogs)"], default=["新聞媒體 (News)", "論壇與部落格 (Forums/Blogs)"]
+        "選擇搜尋頻道", 
+        ["新聞媒體 (News)", "論壇與部落格 (Web/Blogs)", "Reddit 討論區", "Pinterest 靈感"],
+        default=["新聞媒體 (News)"]
     )
 
     if st.button("🚀 開始搜尋", type="primary"):
         if search_kw:
-            with st.spinner("正在全網掃描中..."):
+            with st.spinner("正在各大平台掃描中..."):
                 st.session_state.search_results = run_hybrid_search(search_kw, location, search_scope, time_range)
 
-    # 顯示搜尋結果與分發介面
     if not st.session_state.search_results.empty:
         st.divider()
         st.markdown(f"### 📋 搜尋結果 ({len(st.session_state.search_results)} 筆)")
         
-        # 1. 選擇要分發的資料夾
-        target_folder = st.selectbox("📥 請選擇要存入的資料夾:", st.session_state.folder_list)
+        target_folder = st.selectbox("📥 存入資料夾:", st.session_state.folder_list)
         
-        # 2. 顯示勾選列表
         edited_df = st.data_editor(
             st.session_state.search_results,
             column_config={
                 "Select": st.column_config.CheckboxColumn("收藏", width="small"),
+                "Type": st.column_config.TextColumn("來源類型", width="small"),
                 "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
                 "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
                 "Title": st.column_config.TextColumn("標題"),
@@ -183,66 +210,48 @@ if page == "🔍 情報搜尋專區":
             key="search_editor"
         )
         
-        # 3. 加入按鈕
-        if st.button(f"⬇️ 將勾選項目加入「{target_folder}」"):
+        if st.button(f"⬇️ 加入「{target_folder}」"):
             selected_rows = edited_df[edited_df['Select'] == True].copy()
             if not selected_rows.empty:
-                # 幫這些資料貼上標籤 (Tagging)
                 selected_rows['Folder'] = target_folder
-                # 移除 Select 欄位
                 to_add = selected_rows.drop(columns=['Select'])
-                # 合併到主資料庫
                 st.session_state.favorites = pd.concat([st.session_state.favorites, to_add]).drop_duplicates(subset=['Link'])
-                
-                st.toast(f"✅ 成功將 {len(selected_rows)} 筆資料加入 {target_folder}！")
-                st.success(f"已存入 {target_folder}，請切換至「📂 競品資料夾」查看。")
+                st.success(f"已存入 {target_folder}！")
             else:
                 st.warning("請先勾選資料！")
 
-# === 頁面 B: 競品資料夾 (精選) ===
-elif page == "📂 競品資料夾 (精選)":
+# === 頁面 B: 競品資料夾 ===
+elif page == "📂 競品資料夾":
     st.title("📂 競品情報資料庫")
-    st.caption("這裡存放你所有篩選過的情報，已按資料夾分類。")
-
+    
     if st.session_state.favorites.empty:
-        st.info("目前資料庫是空的，請先去「🔍 搜尋專區」抓取資料。")
+        st.info("目前資料庫是空的。")
     else:
-        # 使用 Tabs 呈現不同資料夾
-        # 為了避免 Tab 太多，我們先過濾出「有資料的資料夾」+「預設列表」的聯集
         active_folders = [f for f in st.session_state.folder_list]
         tabs = st.tabs(active_folders)
 
         for i, folder_name in enumerate(active_folders):
             with tabs[i]:
-                # 篩選出屬於這個資料夾的資料
                 folder_data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
                 
                 if not folder_data.empty:
-                    st.write(f"📁 **{folder_name}** 共有 {len(folder_data)} 筆資料")
-                    
+                    st.write(f"📁 **{folder_name}** ({len(folder_data)} 筆)")
                     st.dataframe(
-                        folder_data[['Date', 'Title', 'Source', 'Link']],
+                        folder_data[['Type', 'Date', 'Title', 'Link']],
                         column_config={
                             "Link": st.column_config.LinkColumn("連結", display_text="Go"),
                             "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
+                            "Type": st.column_config.TextColumn("類型", width="small"),
                         },
                         use_container_width=True,
                         hide_index=True
                     )
                     
-                    # 該資料夾的下載按鈕
                     csv = folder_data.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(
-                        label=f"📥 下載「{folder_name}」報表 (CSV)",
-                        data=csv,
-                        file_name=f'{folder_name}_report.csv',
-                        mime='text/csv',
-                    )
+                    st.download_button(label="📥 下載 CSV", data=csv, file_name=f'{folder_name}.csv', mime='text/csv')
                     
-                    # 刪除功能 (進階)
-                    if st.button(f"🗑️ 清空「{folder_name}」的所有資料", key=f"del_{i}"):
-                        # 保留「不屬於」這個資料夾的資料
+                    if st.button(f"🗑️ 清空此資料夾", key=f"del_{i}"):
                         st.session_state.favorites = st.session_state.favorites[st.session_state.favorites['Folder'] != folder_name]
                         st.rerun()
                 else:
-                    st.info(f"「{folder_name}」目前沒有資料。")
+                    st.info("無資料。")
