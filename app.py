@@ -318,7 +318,7 @@ elif page == "💰 競品比價中心":
     with co17: st.link_button("Le Kitchen", "https://www.lekitcheninc.com/")
     st.divider()
     st.subheader("🔎 特定型號查價")
-    col_a, col_b = st.columns([3, 1])
+    col_a, col_b = st.columns([7, 1])
     with col_a: price_kw = st.text_input("輸入產品型號", placeholder="例如: JQG7501, A831...")
     with col_b: price_region = st.selectbox("查價地區", ["US", "CA"])
     if st.button("💰 搜尋價格"):
