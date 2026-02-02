@@ -308,7 +308,7 @@ elif page == "📈 趨勢分析儀":
 elif page == "💰 競品比價中心":
     st.title("💰 競品比價中心")
     st.subheader("🚀 官網快速傳送門")
-    col1, col2, col3, col4, col5, co16, co16 = st.columns(7)
+    col1, col2, col3, col4, col5, co16, co17 = st.columns(7)
     with col1: st.link_button("SAKURA USA", "https://sakura-usa.com/en-tw")
     with col2: st.link_button("SAKURA CA", "https://sakura-canada.com/")
     with col3: st.link_button("Fotile Store", "https://us.fotileglobal.com/collections/range-hoods")
