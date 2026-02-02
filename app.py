@@ -258,4 +258,102 @@ if page == "🔍 情報搜尋":
         st.markdown(f"### 📋 搜尋結果 ({len(st.session_state.search_results)} 筆)")
         target_folder = st.selectbox("📥 存入資料夾:", st.session_state.folder_list)
         
-        edited_df = st.data_editor
+        edited_df = st.data_editor(
+            st.session_state.search_results,
+            column_config={
+                "Select": st.column_config.CheckboxColumn("收藏", width="small"),
+                "Keyword": st.column_config.TextColumn("關鍵字", width="small"),
+                "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
+                "Type": st.column_config.TextColumn("來源", width="small"),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="search_editor"
+        )
+        
+        if st.button(f"⬇️ 加入「{target_folder}」"):
+            selected_rows = edited_df[edited_df['Select'] == True].copy()
+            if not selected_rows.empty:
+                selected_rows['Folder'] = target_folder
+                to_add = selected_rows.drop(columns=['Select'])
+                st.session_state.favorites = pd.concat([st.session_state.favorites, to_add]).drop_duplicates(subset=['Link'])
+                st.success(f"已存入 {target_folder}！")
+            else:
+                st.warning("請先勾選資料！")
+    elif search_kw and st.session_state.search_results.empty:
+        st.warning("未找到資料。")
+
+# === PAGE 2: 趨勢分析 ===
+elif page == "📈 趨勢分析儀":
+    st.title("📈 Google 趨勢分析儀")
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1: trend_input = st.text_input("輸入關鍵字 (可多個，逗號分隔)", "Fotile, Robam, Pacific")
+    with col2: trend_geo = st.selectbox("地區", ["US", "CA", "HK"])
+    with col3: trend_time = st.selectbox("時間", ["today 12-m", "today 1-m", "today 5-y"])
+    
+    if st.button("📊 分析趨勢", type="primary"):
+        kw_list = [k.strip() for k in trend_input.split(",") if k.strip()]
+        if kw_list:
+            with st.spinner(f"正在分析 {kw_list} ..."):
+                trend_df, related_df = fetch_trends_data(kw_list, trend_geo, trend_time)
+                if not trend_df.empty:
+                    st.line_chart(trend_df)
+                    if not related_df.empty:
+                        st.subheader("💡 相關搜尋")
+                        st.dataframe(related_df, use_container_width=True)
+                else:
+                    st.warning("暫時無法獲取數據 (Rate Limit)。")
+                    st.link_button("👉 前往 Google Trends 官網", f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}")
+
+# === PAGE 3: 比價中心 ===
+elif page == "💰 競品比價中心":
+    st.title("💰 競品比價中心")
+    st.subheader("🚀 官網快速傳送門")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1: st.link_button("Fotile Store", "https://us.fotileglobal.com/collections/range-hoods")
+    with col2: st.link_button("Robam Store", "https://robamliving.com/collections/range-hood")
+    with col3: st.link_button("Pacific Store", "https://pacific-kitchen.com/shop/")
+    with col4: st.link_button("Hauslane", "https://hauslane.com/collections/range-hoods")
+    with col5: st.link_button("SAKURA USA", "https://sakura-usa.com/en-tw")
+    
+    st.divider()
+    st.subheader("🔎 特定型號查價")
+    col_a, col_b = st.columns([3, 1])
+    with col_a: price_kw = st.text_input("輸入產品型號", placeholder="例如: JQG7501...")
+    with col_b: price_region = st.selectbox("地區", ["US", "CA"])
+    
+    if st.button("💰 搜尋價格"):
+        if price_kw:
+            with st.spinner(f"正在搜尋 {price_kw}..."):
+                price_df = fetch_web_search(price_kw, price_region, "過去一個月", platform_mode="shopping")
+                if not price_df.empty:
+                    st.dataframe(price_df[['Title', 'Source', 'Link']], column_config={"Link": st.column_config.LinkColumn("點擊查價", display_text="Go ->")}, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("自動搜尋無結果。")
+                    encoded_kw = urllib.parse.quote(price_kw)
+                    b1, b2 = st.columns(2)
+                    with b1: st.link_button("🔎 Google Shopping", f"https://www.google.com/search?tbm=shop&q={encoded_kw}")
+                    with b2: st.link_button("📦 Amazon", f"https://www.amazon.com/s?k={encoded_kw}")
+
+# === PAGE 4: 資料夾 ===
+elif page == "📂 競品資料夾":
+    st.title("📂 競品情報資料庫")
+    if st.session_state.favorites.empty:
+        st.info("目前無資料。")
+    else:
+        active_folders = st.session_state.folder_list
+        tabs = st.tabs(active_folders)
+        for i, folder_name in enumerate(active_folders):
+            with tabs[i]:
+                data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
+                if not data.empty:
+                    st.write(f"📁 ({len(data)} 筆)")
+                    cols = ['Keyword', 'Type', 'Date', 'Title', 'Link'] if 'Keyword' in data.columns else ['Type', 'Date', 'Title', 'Link']
+                    st.dataframe(data[cols], column_config={"Link": st.column_config.LinkColumn("Go"), "Date": st.column_config.DateColumn(format="YYYY-MM-DD")}, use_container_width=True, hide_index=True)
+                    csv = data.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("📥 下載 CSV", csv, f'{folder_name}.csv', 'text/csv')
+                    if st.button("🗑️ 清空", key=f"del_{i}"):
+                        st.session_state.favorites = st.session_state.favorites[st.session_state.favorites['Folder'] != folder_name]
+                        st.rerun()
+                else:
+                    st.info("無資料")
