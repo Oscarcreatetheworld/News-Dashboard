@@ -3,6 +3,7 @@ import pandas as pd
 import feedparser
 import urllib.parse
 from datetime import datetime
+import time # 用來做一點點延遲，避免被封鎖
 from duckduckgo_search import DDGS
 from pytrends.request import TrendReq
 
@@ -60,7 +61,7 @@ def fetch_google_news(keyword, lang, region):
         else: return pd.DataFrame()
     except: return pd.DataFrame()
 
-# B. DuckDuckGo (一般 & 比價用)
+# B. DuckDuckGo
 def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
@@ -83,8 +84,7 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     elif platform_mode == "pinterest":
         final_keyword = f"{keyword} site:pinterest.com"
         source_type = "📌 Pinterest"
-    elif platform_mode == "shopping": # 新增：查價模式
-        # 強制加上 price 關鍵字，並排除一些無關資訊
+    elif platform_mode == "shopping":
         final_keyword = f"{keyword} price (buy OR shop OR deal)"
         source_type = "💰 價格情報"
     else:
@@ -116,7 +116,7 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# C. 混合搜索控制器
+# C. 混合搜索控制器 (單次搜索用)
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     if location_choice == "🇺🇸 美國 (US)":
@@ -151,8 +151,8 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         result = pd.concat(frames)
         if 'Select' not in result.columns: result['Select'] = False
         result = result.drop_duplicates(subset=['Link'])
-        cols = ['Select'] + [c for c in result.columns if c != 'Select']
-        return result[cols]
+        # 這邊不限制欄位，讓外部迴圈處理 Keyword 欄位
+        return result
     else: return pd.DataFrame(columns=['Select', 'Type', 'Date', 'Title', 'Link', 'Source'])
 
 # D. Google Trends
@@ -174,8 +174,7 @@ def fetch_trends_data(keywords, geo='US', timeframe='today 12-m'):
 # --- 4. 側邊欄導航 ---
 with st.sidebar:
     st.title("🗂️ 系統導航")
-    # 新增第四個選項
-    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀", "💰 競品比價中心 (New)", "📂 競品資料夾"])
+    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀", "💰 競品比價中心", "📂 競品資料夾"])
     st.divider()
     
     st.subheader("⚙️ 資料夾管理")
@@ -191,33 +190,83 @@ with st.sidebar:
 
 if page == "🔍 情報搜尋":
     st.title("🔍 情報搜尋")
+    st.info("💡 提示：支援 **多組關鍵字** 搜尋！請用 **逗號** 分隔，例如：`Fotile, Robam, Miele`")
+
     col1, col2, col3 = st.columns([2, 1, 1])
-    with col1: search_kw = st.text_input("輸入關鍵字", placeholder="例如: Kitchen Island Ideas...")
+    with col1: search_kw = st.text_input("輸入關鍵字 (可多個)", placeholder="例如: Fotile, Robam, Range Hood...")
     with col2: location = st.selectbox("目標市場", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)", "🇭🇰 香港 (HK)"])
     with col3: time_range = st.selectbox("時間範圍", ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"])
     search_scope = st.multiselect("選擇搜尋頻道", ["新聞媒體 (News)", "論壇與部落格 (Web/Blogs)", "Reddit 討論區", "Pinterest 靈感"], default=["新聞媒體 (News)"])
-    if st.button("🚀 開始搜尋", type="primary"):
+    
+    if st.button("🚀 開始多組搜尋", type="primary"):
         if search_kw:
-            with st.spinner("正在搜尋中..."):
-                st.session_state.search_results = run_hybrid_search(search_kw, location, search_scope, time_range)
+            # 1. 處理關鍵字字串，切分成列表
+            keywords_list = [k.strip() for k in search_kw.split(",") if k.strip()]
+            
+            all_frames = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, kw in enumerate(keywords_list):
+                status_text.text(f"正在搜尋: {kw} ... ({i+1}/{len(keywords_list)})")
+                
+                # 執行單一關鍵字搜尋
+                df = run_hybrid_search(kw, location, search_scope, time_range)
+                
+                if not df.empty:
+                    # 🔥 關鍵：幫搜尋結果打上「關鍵字標籤」
+                    df.insert(1, "Keyword", kw)
+                    all_frames.append(df)
+                
+                # 更新進度條
+                progress_bar.progress((i + 1) / len(keywords_list))
+                # 稍微暫停一下，避免太快被 Google/DDG 封鎖
+                time.sleep(0.5)
+
+            # 合併所有結果
+            if all_frames:
+                st.session_state.search_results = pd.concat(all_frames).drop_duplicates(subset=['Link'])
+                status_text.text("搜尋完成！")
+            else:
+                st.session_state.search_results = pd.DataFrame()
+                status_text.text("未找到相關資料。")
+            
+            # 移除進度條
+            time.sleep(1)
+            progress_bar.empty()
+            status_text.empty()
     
     if not st.session_state.search_results.empty:
         st.divider()
         st.markdown(f"### 📋 搜尋結果 ({len(st.session_state.search_results)} 筆)")
         target_folder = st.selectbox("📥 存入資料夾:", st.session_state.folder_list)
-        edited_df = st.data_editor(st.session_state.search_results, column_config={"Select": st.column_config.CheckboxColumn("收藏", width="small"), "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small")}, use_container_width=True, hide_index=True, key="search_editor")
+        
+        # 設定欄位顯示 (新增 Keyword 欄位)
+        edited_df = st.data_editor(
+            st.session_state.search_results, 
+            column_config={
+                "Select": st.column_config.CheckboxColumn("收藏", width="small"), 
+                "Keyword": st.column_config.TextColumn("🔍 關鍵字", width="small"), # 新增這一欄
+                "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
+                "Type": st.column_config.TextColumn("來源", width="small"),
+            }, 
+            use_container_width=True, 
+            hide_index=True, 
+            key="search_editor"
+        )
+        
         if st.button(f"⬇️ 加入「{target_folder}」"):
             selected_rows = edited_df[edited_df['Select'] == True].copy()
             if not selected_rows.empty:
                 selected_rows['Folder'] = target_folder
                 to_add = selected_rows.drop(columns=['Select'])
+                # 如果 favorites 裡還沒有 Keyword 欄位，這會自動補上
                 st.session_state.favorites = pd.concat([st.session_state.favorites, to_add]).drop_duplicates(subset=['Link'])
                 st.success(f"已存入 {target_folder}！")
             else: st.warning("請先勾選資料！")
 
 elif page == "📈 趨勢分析儀":
     st.title("📈 Google 趨勢分析儀")
-    st.markdown("比較關鍵字在一段時間內的熱度變化。")
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1: trend_input = st.text_input("輸入關鍵字 (可多個，用逗號分隔)", "Fotile, Robam, Pacific")
     with col2: trend_geo = st.selectbox("地區", ["US", "CA", "HK"])
@@ -234,80 +283,4 @@ elif page == "📈 趨勢分析儀":
                         st.dataframe(related_df, use_container_width=True)
                 else: st.link_button("👉 前往 Google Trends 官網 (備用)", f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}")
 
-# === 新增：競品比價中心 ===
-elif page == "💰 競品比價中心 (New)":
-    st.title("💰 競品比價中心 (Price Monitor)")
-    st.markdown("快速查看競品官網價格，或搜尋特定型號的通路售價。")
-    
-    # 1. 官網快速傳送門 (靜態連結)
-    st.subheader("🚀 官網快速傳送門 (Quick Links)")
-    st.info("點擊按鈕直接開啟競品「抽油煙機/廚電」商店頁面")
-    
-    col1, col2, col3, col4 ,col5= st.columns(5)
-    with col1:
-        st.markdown("**🇺🇸 方太 (Fotile)**")
-        st.link_button("Go to Store", "https://us.fotileglobal.com/collections/range-hoods")
-    with col2:
-        st.markdown("**🇺🇸 老闆 (Robam)**")
-        st.link_button("Go to Store", "https://robamliving.com/collections/range-hood")
-    with col3:
-        st.markdown("**🇺🇸 太平洋 (Pacific)**")
-        st.link_button("Go to Store", "https://www.2pacific.com/zh-cn/")
-    with col4:
-        st.markdown("**🇺🇸 Hauslane**")
-        st.link_button("Go to Store", "https://hauslane.com/collections/range-hoods")
-    with col5:
-        st.markdown("**🇺🇸 Le Kitchen**")
-        st.link_button("Go to Store", "https://www.lekitcheninc.com/")
-        
-    st.divider()
-
-    # 2. 型號全網查價
-    st.subheader("🔎 特定型號查價")
-    st.caption("輸入型號，系統會搜尋 Amazon, Best Buy, Home Depot 等通路的價格頁面。")
-    
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        price_kw = st.text_input("輸入產品型號", placeholder="例如: JQG7501, A831, UC-PS18...")
-    with col_b:
-        price_region = st.selectbox("查價地區", ["US", "CA"])
-    
-    if st.button("💰 搜尋價格情報"):
-        if price_kw:
-            with st.spinner(f"正在搜尋 {price_kw} 的價格資訊..."):
-                # 使用特殊的 shopping 模式
-                price_df = fetch_web_search(price_kw, price_region, "過去一個月", platform_mode="shopping")
-                
-                if not price_df.empty:
-                    st.success(f"找到 {len(price_df)} 筆相關價格頁面")
-                    st.dataframe(
-                        price_df[['Title', 'Source', 'Link']],
-                        column_config={
-                            "Link": st.column_config.LinkColumn("點擊查價", display_text="Go ->"),
-                            "Source": st.column_config.TextColumn("通路/來源"),
-                            "Title": st.column_config.TextColumn("商品標題"),
-                        },
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.warning("找不到明確的價格頁面，建議直接點擊上方官網查詢。")
-
-elif page == "📂 競品資料夾":
-    st.title("📂 競品情報資料庫")
-    if st.session_state.favorites.empty: st.info("目前資料庫是空的。")
-    else:
-        active_folders = [f for f in st.session_state.folder_list]
-        tabs = st.tabs(active_folders)
-        for i, folder_name in enumerate(active_folders):
-            with tabs[i]:
-                folder_data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
-                if not folder_data.empty:
-                    st.write(f"📁 **{folder_name}** ({len(folder_data)} 筆)")
-                    st.dataframe(folder_data[['Type', 'Date', 'Title', 'Link']], column_config={"Link": st.column_config.LinkColumn("連結", display_text="Go"), "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD")}, use_container_width=True, hide_index=True)
-                    csv = folder_data.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(label="📥 下載 CSV", data=csv, file_name=f'{folder_name}.csv', mime='text/csv')
-                    if st.button(f"🗑️ 清空此資料夾", key=f"del_{i}"):
-                        st.session_state.favorites = st.session_state.favorites[st.session_state.favorites['Folder'] != folder_name]
-                        st.rerun()
-                else: st.info("無資料。")
+elif page ==
