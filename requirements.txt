@@ -3,3 +3,4 @@ pandas
 feedparser
 altair
 duckduckgo-search
+pytrends
