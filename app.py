@@ -3,7 +3,7 @@ import pandas as pd
 import feedparser
 import urllib.parse
 from datetime import datetime
-import time # 用來做一點點延遲，避免被封鎖
+import time
 from duckduckgo_search import DDGS
 from pytrends.request import TrendReq
 
@@ -116,7 +116,7 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# C. 混合搜索控制器 (單次搜索用)
+# C. 混合搜索控制器
 def run_hybrid_search(keyword, location_choice, search_types, time_range):
     frames = []
     if location_choice == "🇺🇸 美國 (US)":
@@ -151,7 +151,6 @@ def run_hybrid_search(keyword, location_choice, search_types, time_range):
         result = pd.concat(frames)
         if 'Select' not in result.columns: result['Select'] = False
         result = result.drop_duplicates(subset=['Link'])
-        # 這邊不限制欄位，讓外部迴圈處理 Keyword 欄位
         return result
     else: return pd.DataFrame(columns=['Select', 'Type', 'Date', 'Title', 'Link', 'Source'])
 
@@ -190,63 +189,85 @@ with st.sidebar:
 
 if page == "🔍 情報搜尋":
     st.title("🔍 情報搜尋")
-    st.info("💡 提示：支援 **多組關鍵字** 搜尋！請用 **逗號** 分隔，例如：`Fotile, Robam, Miele`")
-
+    
     col1, col2, col3 = st.columns([2, 1, 1])
-    with col1: search_kw = st.text_input("輸入關鍵字 (可多個)", placeholder="例如: Fotile, Robam, Range Hood...")
+    with col1: search_kw = st.text_input("輸入關鍵字 (可多個)", placeholder="例如: Fotile, Robam, Review...")
     with col2: location = st.selectbox("目標市場", ["🇺🇸 美國 (US)", "🇨🇦 加拿大 (CA)", "🇭🇰 香港 (HK)"])
     with col3: time_range = st.selectbox("時間範圍", ["不限時間 (預設)", "過去一天", "過去一週", "過去一個月", "過去一年"])
-    search_scope = st.multiselect("選擇搜尋頻道", ["新聞媒體 (News)", "論壇與部落格 (Web/Blogs)", "Reddit 討論區", "Pinterest 靈感"], default=["新聞媒體 (News)"])
     
-    if st.button("🚀 開始多組搜尋", type="primary"):
+    # 🔥 新增：邏輯選擇器
+    st.markdown("---")
+    col_logic, col_scope = st.columns([1, 2])
+    with col_logic:
+        search_logic = st.radio(
+            "🔗 關鍵字邏輯", 
+            ["🔄 個別分開搜 (A, B)", "🔀 聯集搜尋 (A OR B)", "➕ 交集搜尋 (A AND B)"],
+            help="分開搜：每個詞跑一次。\n聯集：找包含A或B的文章 (適合比對)。\n交集：找同時有A和B的文章 (適合精確縮小範圍)。"
+        )
+    with col_scope:
+        search_scope = st.multiselect("選擇搜尋頻道", ["新聞媒體 (News)", "論壇與部落格 (Web/Blogs)", "Reddit 討論區", "Pinterest 靈感"], default=["新聞媒體 (News)"])
+    
+    st.markdown("---")
+
+    if st.button("🚀 開始搜尋", type="primary"):
         if search_kw:
-            # 1. 處理關鍵字字串，切分成列表
+            # 1. 處理關鍵字列表
             keywords_list = [k.strip() for k in search_kw.split(",") if k.strip()]
             
-            all_frames = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # 初始化
+            st.session_state.search_results = pd.DataFrame()
             
-            for i, kw in enumerate(keywords_list):
-                status_text.text(f"正在搜尋: {kw} ... ({i+1}/{len(keywords_list)})")
+            # === 邏輯 A: 個別分開搜 (Loop) ===
+            if "個別分開搜" in search_logic:
+                all_frames = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # 執行單一關鍵字搜尋
-                df = run_hybrid_search(kw, location, search_scope, time_range)
+                for i, kw in enumerate(keywords_list):
+                    status_text.text(f"正在搜尋: {kw} ...")
+                    df = run_hybrid_search(kw, location, search_scope, time_range)
+                    if not df.empty:
+                        df.insert(1, "Keyword", kw) # 標記來源
+                        all_frames.append(df)
+                    progress_bar.progress((i + 1) / len(keywords_list))
+                    time.sleep(0.5)
                 
-                if not df.empty:
-                    # 🔥 關鍵：幫搜尋結果打上「關鍵字標籤」
-                    df.insert(1, "Keyword", kw)
-                    all_frames.append(df)
-                
-                # 更新進度條
-                progress_bar.progress((i + 1) / len(keywords_list))
-                # 稍微暫停一下，避免太快被 Google/DDG 封鎖
-                time.sleep(0.5)
+                if all_frames:
+                    st.session_state.search_results = pd.concat(all_frames).drop_duplicates(subset=['Link'])
+                progress_bar.empty()
+                status_text.empty()
 
-            # 合併所有結果
-            if all_frames:
-                st.session_state.search_results = pd.concat(all_frames).drop_duplicates(subset=['Link'])
-                status_text.text("搜尋完成！")
-            else:
-                st.session_state.search_results = pd.DataFrame()
-                status_text.text("未找到相關資料。")
-            
-            # 移除進度條
-            time.sleep(1)
-            progress_bar.empty()
-            status_text.empty()
-    
+            # === 邏輯 B: 聯集搜尋 (OR) ===
+            elif "聯集搜尋" in search_logic:
+                # 組合成 "A OR B"
+                combined_query = " OR ".join([f"({k})" for k in keywords_list])
+                with st.spinner(f"正在執行聯集搜尋: {combined_query}"):
+                    df = run_hybrid_search(combined_query, location, search_scope, time_range)
+                    if not df.empty:
+                        df.insert(1, "Keyword", "聯集結果")
+                        st.session_state.search_results = df
+
+            # === 邏輯 C: 交集搜尋 (AND) ===
+            elif "交集搜尋" in search_logic:
+                # 組合成 "A AND B"
+                combined_query = " AND ".join([f"({k})" for k in keywords_list])
+                with st.spinner(f"正在執行交集搜尋: {combined_query}"):
+                    df = run_hybrid_search(combined_query, location, search_scope, time_range)
+                    if not df.empty:
+                        df.insert(1, "Keyword", "交集結果")
+                        st.session_state.search_results = df
+
+    # 顯示結果
     if not st.session_state.search_results.empty:
         st.divider()
         st.markdown(f"### 📋 搜尋結果 ({len(st.session_state.search_results)} 筆)")
         target_folder = st.selectbox("📥 存入資料夾:", st.session_state.folder_list)
         
-        # 設定欄位顯示 (新增 Keyword 欄位)
         edited_df = st.data_editor(
             st.session_state.search_results, 
             column_config={
                 "Select": st.column_config.CheckboxColumn("收藏", width="small"), 
-                "Keyword": st.column_config.TextColumn("🔍 關鍵字", width="small"), # 新增這一欄
+                "Keyword": st.column_config.TextColumn("🔍 關鍵字", width="small"),
                 "Link": st.column_config.LinkColumn("連結", display_text="Go", width="small"),
                 "Type": st.column_config.TextColumn("來源", width="small"),
             }, 
@@ -260,10 +281,11 @@ if page == "🔍 情報搜尋":
             if not selected_rows.empty:
                 selected_rows['Folder'] = target_folder
                 to_add = selected_rows.drop(columns=['Select'])
-                # 如果 favorites 裡還沒有 Keyword 欄位，這會自動補上
                 st.session_state.favorites = pd.concat([st.session_state.favorites, to_add]).drop_duplicates(subset=['Link'])
                 st.success(f"已存入 {target_folder}！")
             else: st.warning("請先勾選資料！")
+    elif search_kw and st.session_state.search_results.empty:
+        st.warning("未找到資料。")
 
 elif page == "📈 趨勢分析儀":
     st.title("📈 Google 趨勢分析儀")
@@ -318,9 +340,7 @@ elif page == "📂 競品資料夾":
                 folder_data = st.session_state.favorites[st.session_state.favorites['Folder'] == folder_name]
                 if not folder_data.empty:
                     st.write(f"📁 **{folder_name}** ({len(folder_data)} 筆)")
-                    # 這裡也把 Keyword 欄位秀出來
                     cols_to_show = ['Keyword', 'Type', 'Date', 'Title', 'Link'] if 'Keyword' in folder_data.columns else ['Type', 'Date', 'Title', 'Link']
-                    
                     st.dataframe(folder_data[cols_to_show], column_config={"Link": st.column_config.LinkColumn("連結", display_text="Go"), "Date": st.column_config.DateColumn("日期", format="YYYY-MM-DD")}, use_container_width=True, hide_index=True)
                     csv = folder_data.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(label="📥 下載 CSV", data=csv, file_name=f'{folder_name}.csv', mime='text/csv')
