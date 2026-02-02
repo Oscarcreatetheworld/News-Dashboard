@@ -243,7 +243,7 @@ elif page == "💰 競品比價中心 (New)":
     st.subheader("🚀 官網快速傳送門 (Quick Links)")
     st.info("點擊按鈕直接開啟競品「抽油煙機/廚電」商店頁面")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 ,col5= st.columns(5)
     with col1:
         st.markdown("**🇺🇸 方太 (Fotile)**")
         st.link_button("Go to Store", "https://us.fotileglobal.com/collections/range-hoods")
