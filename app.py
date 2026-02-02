@@ -8,7 +8,7 @@ from duckduckgo_search import DDGS
 from pytrends.request import TrendReq
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="全球廚電情報中心 Visual", page_icon="🍳", layout="wide")
+st.set_page_config(page_title="全球廚電情報中心", page_icon="🍳", layout="wide")
 
 # --- 2. Session State 初始化 ---
 if 'favorites' not in st.session_state:
@@ -61,7 +61,7 @@ def fetch_google_news(keyword, lang, region):
         else: return pd.DataFrame()
     except: return pd.DataFrame()
 
-# B. DuckDuckGo (一般文字搜尋)
+# B. DuckDuckGo
 def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
     if region_code == "US": ddg_region = "us-en"
     elif region_code == "CA": ddg_region = "ca-en"
@@ -113,14 +113,12 @@ def fetch_web_search(keyword, region_code, time_range, platform_mode=None):
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# C. 圖片搜尋 (Visual Monitor 核心)
+# C. 圖片搜尋
 def fetch_images(keyword, max_results=20):
     try:
-        # 使用 DDG 的圖片搜尋功能
-        # 加上 "promotion", "banner" 等字眼來優化結果
         search_query = f"{keyword} (banner OR promotion OR ad OR poster)"
         results = DDGS().images(keywords=search_query, region="wt-wt", safesearch="off", max_results=max_results)
-        return results # 回傳原本的 list 格式
+        return results
     except Exception as e:
         return []
 
@@ -181,8 +179,7 @@ def fetch_trends_data(keywords, geo='US', timeframe='today 12-m'):
 # --- 4. 側邊欄導航 ---
 with st.sidebar:
     st.title("🗂️ 系統導航")
-    # 把「競品比價中心」改成「競品視覺牆」
-    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀", "🎨 競品視覺牆 (New)", "📂 競品資料夾"])
+    page = st.radio("前往專區", ["🔍 情報搜尋", "📈 趨勢分析儀", "🎨 視覺 & 官網 (New)", "📂 競品資料夾"])
     st.divider()
     
     st.subheader("⚙️ 資料夾管理")
@@ -288,11 +285,25 @@ elif page == "📈 趨勢分析儀":
                     st.warning("暫時無法獲取數據。")
                     st.link_button("👉 前往 Google Trends 官網", f"https://trends.google.com/trends/explore?date={trend_time.replace(' ', '%20')}&geo={trend_geo}&q={','.join(kw_list)}")
 
-# === PAGE 3: 競品視覺牆 (New) ===
-elif page == "🎨 競品視覺牆 (New)":
-    st.title("🎨 競品視覺牆 (Visual Monitor)")
-    st.markdown("搜尋競品的 **Banner、促銷海報、廣告素材**。")
+# === PAGE 3: 視覺 & 官網 (合併版) ===
+elif page == "🎨 視覺 & 官網 (New)":
+    st.title("🎨 視覺 & 官網 (Visual & Store)")
     
+    # --- Part 1: 官網傳送門 ---
+    st.subheader("🚀 官網快速傳送門")
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+    with col1: st.link_button("SAKURA USA", "https://sakura-usa.com/en-tw")
+    with col2: st.link_button("SAKURA CA", "https://sakura-canada.com/")
+    with col3: st.link_button("Fotile Store", "https://us.fotileglobal.com/collections/range-hoods")
+    with col4: st.link_button("Robam Store", "https://robamliving.com/collections/range-hood")
+    with col5: st.link_button("Pacific Store", "https://pacific-kitchen.com/shop/")
+    with col6: st.link_button("Hauslane", "https://hauslane.com/collections/range-hoods")
+    with col7: st.link_button("Le Kitchen", "https://www.lekitcheninc.com/")
+    
+    st.divider()
+
+    # --- Part 2: 圖片搜尋 ---
+    st.subheader("🖼️ 全網圖片搜尋 (Banner/Ads)")
     col_a, col_b = st.columns([3, 1])
     with col_a:
         img_kw = st.text_input("輸入品牌或產品 (例如: Fotile promotion)", value="Fotile promotion")
@@ -302,34 +313,18 @@ elif page == "🎨 競品視覺牆 (New)":
     if img_btn and img_kw:
         with st.spinner(f"正在搜集 {img_kw} 的行銷素材..."):
             images = fetch_images(img_kw, max_results=30)
-            
             if images:
                 st.success(f"找到 {len(images)} 張圖片")
-                
-                # 使用 4 列瀑布流顯示
                 cols = st.columns(4)
                 for i, img in enumerate(images):
                     with cols[i % 4]:
                         try:
-                            # 顯示圖片
                             st.image(img['image'], use_container_width=True)
-                            # 顯示標題與連結
                             st.caption(f"[{img['title']}]({img['url']})")
-                        except:
-                            pass # 如果圖片讀取失敗就跳過
+                        except: pass
             else:
-                st.warning("找不到相關圖片，請嘗試更換關鍵字 (例如: Fotile Banner)。")
+                st.warning("找不到相關圖片，請嘗試更換關鍵字。")
 
-st.title("💰 競品比價中心")
-    st.subheader("🚀 官網快速傳送門")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: st.link_button("Fotile Store", "https://us.fotileglobal.com/collections/range-hoods")
-    with col2: st.link_button("Robam Store", "https://robamliving.com/collections/range-hood")
-    with col3: st.link_button("Pacific Store", "https://pacific-kitchen.com/shop/")
-    with col4: st.link_button("Hauslane", "https://hauslane.com/collections/range-hoods")
-    with col5: st.link_button("SAKURA USA", "https://sakura-usa.com/en-tw")
-    
-    st.divider()
 # === PAGE 4: 資料夾 ===
 elif page == "📂 競品資料夾":
     st.title("📂 競品情報資料庫")
